@@ -1,0 +1,58 @@
+# ---- 密钥与本地状态（严禁入库） ----
+.env
+.env.*
+data/llm_keys.local.json
+data/db_keys.local.json
+data/llm_state.json
+# 可入库的示例模板
+!.env.example
+!data/db_keys.local.json.example
+
+# ---- IDE / 工具 ----
+.trae/
+.vscode/
+.idea/
+.DS_Store
+
+# ---- 环境与缓存 ----
+.venv/
+.venv.*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- 打包产物 ----
+build/
+dist/
+*.spec
+start-fin-research-agent.exe
+
+# ---- 运行时 data/ 下的临时/探测/烟测产物（可重建） ----
+data/probe_*.json
+data/smoke_*.json
+data/tools_schema.json
+data/sina_zcfz_*.json
+data/_*.txt
+data/web_corpus/
+data/regulation/raw/
+
+# ---- 数据产物（原始文档 / 解析中间件 / 索引 / 向量 / DB） ----
+# 这些体积大且可通过 scripts/ingest_all.py 重建
+data/raw/
+data/parsed/
+data/index/
+data/vector/
+data/db/
+*.db
+*.db-*
+*.pkl
+
+# ---- seed/ 下可重建的大体积产物（保留 seed/business.json 和目录结构） ----
+seed/data/vector/
+seed/data/parsed/
+seed/data/index/
+
+# ---- 外部嵌入 git 仓库（如有） ----
+.git/modules/

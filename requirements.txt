@@ -1,0 +1,58 @@
+# 运行时依赖 —— 与 Docker 镜像保持一致，新增依赖务必同步 EXTENSION.md
+#
+# 分步安装原则：Step 0/1 只装到「拿到年报原文 + 建字面检索索引」为止。
+# 向量/重排（torch 系）与编排（langgraph 系）在对应步骤再放开，
+# 避免第一天就卡在装包上（见 实施方案 §3 的 Step 0 说明）。
+
+# ---- Step 0/1：数据管线与字面检索（当前启用）----
+pymupdf>=1.24            # 年报 PDF 按页解析（保留页码，溯源必需）
+rank-bm25>=0.2           # BM25 字面检索（零外部服务，先跑通检索链路）
+jieba>=0.42              # 中文分词（金融专有名词多，用 search 模式提召回）
+pyyaml>=6.0              # config/watchlist.yaml
+requests>=2.31           # 巨潮/东财取数（自写薄封装，不引 akshare）
+
+# ---- 服务层（Step 3 起启用）----
+fastapi>=0.115           # /api/ask 与 /api/health
+uvicorn[standard]>=0.30  # ASGI 服务器
+pydantic>=2.7            # 请求体校验（FastAPI 依赖）
+# python-multipart>=0.0.20   # Step 5 上传类接口（引用详情/文件）时再放开
+
+# ---- 鉴权与网络搜索（本轮新增）----
+PyJWT>=2.8               # JWT 签发/校验（HS256）；签名校验不自己造轮子
+duckduckgo-search>=6.0   # ddg 备选通道的**可选**依赖；默认通道 bing 零依赖抓 HTML（见 src/search/provider.py）
+# 口令哈希**刻意不引 passlib/bcrypt**：passlib 与 bcrypt 4.x 有已知不兼容，
+# 而标准库 hashlib.pbkdf2_hmac 已能满足「加盐 + 慢哈希 + 恒时比较」，
+# 沿用本项目「能自写就不引重依赖」的一贯取舍（同 config.py 对 akshare 的处理）。
+# 登录入参用 JSON 而非 OAuth2PasswordRequestForm，故**不需要 python-multipart**。
+
+# ---- 编排（Step 3 起启用）----
+langchain-openai>=0.2    # ChatOpenAI（走 OpenAI 兼容接口，多供应商共用）
+langgraph>=0.2           # retrieve→generate→cite 子图；Step 5 扩成主图（router/verify/HITL）
+# Step 5 HITL（人工确认）必需：**没有它 interrupt() 无法落盘，挂起就等于丢状态**。
+# 本步只用 SQLite；MySQL 后端见下面被注释的 langgraph-checkpoint-mysql。
+langgraph-checkpoint-sqlite>=2.0
+
+# ---- 数据源双后端（Step 2 起启用；沿用 workflow-agent 的成熟方案）----
+langgraph-checkpoint-mysql>=3.0   # Checkpointer 外置 MySQL；需要 MySQL >= 8.0.19
+PyMySQL[rsa]>=1.1                 # 必须带 [rsa]：MySQL 8 的 caching_sha2_password 非 TLS 首次认证要 RSA
+
+# ---- 检索增强（Step 4 起启用）----
+# 向量库用 numpy 精确余弦（2650×1024 ≈ 11MB，单查 <1ms）。
+# 不用 chromadb / faiss：这个量级上 ANN 只会白白引入近似召回损失，
+# 而 Step 4 的评测恰恰是在测召回变化 —— 用会丢召回的索引去测召回，基线就被污染了。
+numpy>=1.26               # 向量矩阵与相似度（rank-bm25 已隐式带，但本层直接 import，显式声明）
+# sentence-transformers>=3.0   # 仅 EMBEDDING_BACKEND=local 时需要（离线通道，要下权重）；api 通道不需要
+# chromadb>=0.5                # 数据量上万后再换 ANN 时放开；只需替换 src/retrieve/vector.py
+
+# ---- 评估（Step 6 起启用）----
+# 检索级评测已在 Step 4 用纯标准库 + numpy 做完（scripts/eval_retrieval.py，不调模型、零依赖）；
+# 这里放开的是**答案级**评估（faithfulness / answer_relevancy），它必须调 LLM。
+# ragas>=0.2
+
+# ---- 部署（VM 部署脚本用）----
+# 仅 scripts/ 里的 VM 部署脚本需要；容器内运行不依赖它，故与运行时依赖分开列。
+paramiko>=3.4            # SSH/SFTP 推镜像与配置到远端 VM
+
+# 测试依赖
+pytest>=8.0
+httpx>=0.27              # fastapi.testclient 的传输层（HTTP 面用例跑它，不需要起真服务）

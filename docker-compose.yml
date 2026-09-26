@@ -1,0 +1,119 @@
+# 一键私有化部署（Step 6 容器化交付）：
+#   docker compose up -d                     # app + MySQL 8（默认走 MySQL 后端）
+#   纯 SQLite 容器形态（不起 MySQL）：FA_DB_BACKEND=sqlite docker compose up -d app --no-deps
+# 打开 http://localhost:8000/ 即财报分析工作台。
+services:
+  app:
+    build:
+      context: .
+      args:
+        # 构建期 pip 源（默认阿里云；海外环境：PIP_INDEX_URL=https://pypi.org/simple/）
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+    container_name: fin-research-agent
+    ports:
+      # 宿主机端口可用 APP_PORT 覆盖。默认 8000；VM 192.168.57.128 上 8000 已被
+      # 姊妹项目 workflow-agent 的容器占用，故那边实测用 APP_PORT=8001
+      # （见 scripts/deploy_vm.py 的 VM_APP_PORT）。容器内始终监听 8000 不变，
+      # 所以容器内健康检查与探针都不受影响。
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # ---- LLM 密钥（优先读环境变量；勿把真实 Key 提交进仓库）----
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      # ---- 检索通道（hybrid = BM25 + 向量 + RRF；缺 Key 时自动降级为 BM25）----
+      RETRIEVE_MODE: ${RETRIEVE_MODE:-hybrid}
+      # ---- 鉴权（JWT）----
+      # 默认**开启**（安全默认）：业务端点一律要 Bearer token。
+      # ⚠️ 未提供 FA_JWT_SECRET 时**启动即失败**，这是刻意的 ——
+      #    用默认密钥签发的 token 等于没有鉴权，且从外部完全看不出来。
+      #    部署前先在 .env 里给一个随机长串：python -c "import secrets;print(secrets.token_urlsafe(48))"
+      # 纯单机演示、不打算配密钥：把 FA_AUTH_ENABLED 置 0（此时前端显示「单机模式（免登录）」）。
+      FA_AUTH_ENABLED: ${FA_AUTH_ENABLED:-1}
+      FA_JWT_SECRET: ${FA_JWT_SECRET:-}
+      # 首次启动时按这两个值建出演示账号（**幂等**：账号已存在则不覆盖口令）。
+      # 默认口令为空 → 不建号；口令需 ≥8 位，否则同样不建号并打印提示。
+      SEED_ADMIN_USER: ${SEED_ADMIN_USER:-admin}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      # ---- 联网搜索兜底（库中查不到时的兑底通道）----
+      # 默认开；默认通道 bing 免 Key 且国内可达。默认**不写任何 Key**。
+      FA_WEB_SEARCH_ENABLED: ${FA_WEB_SEARCH_ENABLED:-1}
+      FA_WEB_SEARCH_BACKEND: ${FA_WEB_SEARCH_BACKEND:-bing}
+      # 仅切到 tavily 通道时才需要真实 Key（默认留空 = 免 Key 的 bing 通道）
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      # ---- 数据源：容器里一律用环境变量 ----
+      # data/db_keys.local.json 不会被 COPY 进镜像，且 /app/data 被数据卷挂载遮住，
+      # 所以这里必须显式给全（否则会静默退回 sqlite 同容器库）。
+      FA_DB_BACKEND: ${FA_DB_BACKEND:-mysql}
+      MYSQL_HOST: ${MYSQL_HOST:-web-db}
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:-agent}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-finagent}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-fin_research}
+    volumes:
+      # 语料/索引持久化（首次启动由 entrypoint 从 /app/seed 灌入，cp -rn 不覆盖用户挂卷放的真语料）
+      - fin-research-data:/app/data
+    depends_on:
+      web-db:
+        # 必须等 MySQL 真的能连上再起 app，否则 entrypoint 的等库/建表会白重试
+        condition: service_healthy
+    healthcheck:
+      # 与 Dockerfile 的 HEALTHCHECK 同口径：slim 里没 curl，用 python 标准库打 /api/health
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # 首次启动要等 MySQL + 灌 seed，给足宽限期，避免误判 unhealthy
+      start_period: 60s
+    # 内存护栏（本 VM 只有 3.8G，上面还跑着整套 Dify + workflow-agent）。
+    # 故意给得比实际需要宽：它只用来防"某个进程失控把宿主机拖死"，不是用来挤压正常运行 ——
+    # Docker 的 mem_limit 一旦顶到会**直接 OOM-kill 容器**，而本 VM 另有约 3G swap，
+    # 真紧张时宁可换页慢一点也不要被杀。故这里留足余量。
+    mem_limit: 1200m
+    restart: unless-stopped
+
+  web-db:
+    image: mysql:8.0
+    container_name: fin-research-agent-web-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-finroot}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-fin_research}
+      # 应用用非 root 账号连（官方镜像会自动建这个账号并授权到 MYSQL_DATABASE）
+      MYSQL_USER: ${MYSQL_USER:-agent}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-finagent}
+      # 注意：**不要设 TZ 环境变量**。官方镜像只要 TZ 非空就会跑 mysql_tzinfo_to_sql
+      # 把时区表灌进 mysql 库 —— 那是初始化里最慢的一步（实测能拖十几倍），
+      # 这正是容器长时间 unhealthy 的常见原因。要北京时间用下面的偏移量参数即可。
+    command:
+      - mysqld
+      # 用数字偏移代替 TZ：NOW() / CURRENT_TIMESTAMP 直接返回北京时间，且不加载时区表
+      - --default-time-zone=+08:00
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # 本 VM 只有 3.8G 内存：把 InnoDB 缓冲池钉在 128M、关掉 performance_schema
+      # （后者能省 100~200MB）。库里只有几百行指标 + 几张表，这点缓冲池绰绰有余。
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=OFF
+    volumes:
+      # ⚠️ 该卷**只在首次创建时初始化**：卷已存在时改 MYSQL_* 不会有任何效果
+      #    （账号/库还是老的）。改了 MYSQL_* 要重新初始化：
+      #      docker compose down -v && docker compose up -d
+      - fin-research-mysql:/var/lib/mysql
+    healthcheck:
+      # mysqladmin ping 的语义是「服务是否在监听」（连 Access denied 都返回 0）。
+      # 初始化期间的临时服务器只开 socket（TCP 未监听，port=0）→ 天然不会把
+      # "还在初始化"误判为健康。代价：它**不校验凭据**，账号口令配错也照样转 healthy，
+      # 错误要到 app 真连库时才暴露（所以别把健康检查当成"配置正确"的证明）。
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      # 首次初始化要建 InnoDB 系统表 + 建库建账号，给足宽限期
+      start_period: 120s
+    # 内存护栏（同 app：防失控，不挤正常运行）
+    mem_limit: 900m
+    restart: unless-stopped
+
+volumes:
+  fin-research-data:
+  fin-research-mysql:

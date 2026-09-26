@@ -1,0 +1,48 @@
+# Docker 构建上下文裁剪：镜像里只放「跑服务必需的代码 + seed 语料」。
+# ⚠️ 本文件与 .gitignore 是**两套独立规则**（Docker 只认本文件，不读 .gitignore），
+#    别互相抄：例如 seed/ 必须入镜像（.gitignore 里没有它的例外，这里要显式放行）。
+
+# ---- 环境与缓存 ----
+.venv/
+.venv.*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- 版本控制 ----
+.git/
+.gitignore
+
+# ---- 测试 / 评估 / 文档：镜像不需要 ----
+tests/
+eval/
+docs/
+
+# ---- 大且可重建的数据产物（**注意：seed/ 与 data/regulation/ 必须放行**）----
+data/raw/
+data/parsed/
+data/index/
+data/vector/
+data/db/
+*.db
+*.db-*
+
+# ---- 密钥与本地状态：绝不进镜像 ----
+# ⚠️ 必须写 `**/*.local.json` 而不是 `*.local.json`：Docker 的 .dockerignore **锚定在构建上下文根**，
+#    单个 `*` **不跨 `/`**（官方文档的例子 `*/temp*` 明确写着"仅匹配根的一级子目录"）。
+#    写裸 `*.local.json` 只会挡住根目录下的同名文件，**放行 `data/db_keys.local.json`
+#    （真实 MySQL 口令）与 `data/llm_keys.local.json`（真实 API Key）** —— 与本节"绝不进镜像"的
+#    意图相反。加 `**/` 才是"任意层级"。（这些文件未被 Dockerfile COPY，故不会进最终镜像；
+#    但它们在构建上下文里会被整包传给 docker daemon。）
+**/*.local.json
+data/llm_state.json
+.env
+.env.*
+
+# ---- 显式放行：seed 语料（烤到 /app/seed）与法规原始件（烤到 /app/data/regulation）----
+!seed/
+!seed/**
+!data/regulation/
+!data/regulation/**

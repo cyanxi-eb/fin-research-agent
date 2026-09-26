@@ -1,0 +1,50 @@
+# 目标公司清单 —— 入库管线的唯一输入。
+#
+# 字段说明：
+#   code     股票代码（A 股 6 位）
+#   name     公司简称（会进 chunk 元数据与引用文案，写全称/简称都行，但要统一）
+#   org_id   巨潮的机构 ID。**注意：不能靠代码推**（600519→gssh0600519 看似有规律，
+#            但 300750→GD165627、002594→gshk0001211、601318→9900002221 毫无规律）。
+#            留空则入库时自动走 topSearch 接口查，查到后会写回 data/raw/<code>/manifest.json。
+#   market   巨潮的 column，留空则按代码自动判断（6→sse / 0,3→szse / 4,8→bj）
+#   industry 行业标签，Step 2 的「同行业对比」要用
+#   years    要入库的年报年份（年报是次年披露，2024 年报在 2025 年发公告）
+#
+# 想加公司：粘一行 code+name+years 即可，其余留空会自动补。
+
+companies:
+  - code: "600519"
+    name: 贵州茅台
+    org_id: gssh0600519
+    market: sse
+    industry: 食品饮料
+    years: [2024, 2025]   # 2025 年报的公告 size 只有 ~1MB（别的年份 ~3.5MB），
+                          # 特意一起入库，用来验证它是不是完整年报（看页数）
+
+  - code: "000858"
+    name: 五粮液
+    org_id: ""            # 故意留空：用来验证 lookup_org_id 自动查询这条路径
+    market: ""
+    industry: 食品饮料
+    years: [2024]
+
+  - code: "300750"
+    name: 宁德时代
+    org_id: GD165627
+    market: szse
+    industry: 电力设备
+    years: [2024]
+
+  - code: "002594"
+    name: 比亚迪
+    org_id: gshk0001211
+    market: szse
+    industry: 汽车
+    years: [2024]
+
+  - code: "601318"
+    name: 中国平安
+    org_id: 9900002221
+    market: sse
+    industry: 非银金融
+    years: [2024]
