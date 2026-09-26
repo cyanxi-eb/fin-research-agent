@@ -7,7 +7,7 @@ uvicorn src.server:app --reload --port 8000
 
 路由文件：
   src/api/routes/{auth,ask,web,compare,ingest,audit}.py — 各导出 `router`
-  src/server.py — 只负责 app 生命周期 + 根路由 + health + router 装配
+  src/server.py — 只负责 app 生命周期 + 根路由 + health + middleware + router 装配
 
 **设计纪律**：会阻塞的端点用同步 `def`（FastAPI 自动丢线程池）；
 只有 SSE `/api/ask/stream` 是 async（留在事件循环里逐段写）。
@@ -15,10 +15,11 @@ uvicorn src.server:app --reload --port 8000
 from __future__ import annotations
 
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -60,6 +61,24 @@ app = FastAPI(
     description="年报问答与分析 Agent（可核验溯源）",
     lifespan=lifespan,
 )
+
+
+# ==================== RequestId middleware ====================
+# 每个请求分配或透传一个 trace_id（HTTP header X-Request-Id），写入 response header。
+# 零破坏性：测试不因 header 存在而失败；后续可在 route 里通过 request.state.request_id
+# 取到它，用于审计日志的统一关联键。
+@app.middleware("http")
+async def _request_id_middleware(request: Request, call_next):
+    request_id = (
+        request.headers.get("x-request-id")
+        or request.headers.get("x-trace-id")
+        or uuid.uuid4().hex
+    )
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
+
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
