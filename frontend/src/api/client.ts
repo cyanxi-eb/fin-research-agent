@@ -107,10 +107,12 @@ client.interceptors.response.use(
   },
 )
 
-// 便捷封装：业务端点都用 client.get/post
+// 便捷封装：业务端点都用 client.get/post/delete
 export const http = {
   get: <T = unknown>(url: string, cfg?: AxiosRequestConfig) =>
     client.get<T>(url, cfg).then((r) => r.data),
   post: <T = unknown>(url: string, data?: unknown, cfg?: AxiosRequestConfig) =>
     client.post<T>(url, data, cfg).then((r) => r.data),
+  delete: <T = unknown>(url: string, cfg?: AxiosRequestConfig) =>
+    client.delete<T>(url, cfg).then((r) => r.data),
 }

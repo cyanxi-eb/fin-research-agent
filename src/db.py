@@ -75,6 +75,49 @@ CREATE INDEX IF NOT EXISTS idx_fi_code_indicator ON financial_indicators(code, i
 CREATE INDEX IF NOT EXISTS idx_fi_period ON financial_indicators(period);
 CREATE INDEX IF NOT EXISTS idx_reports_code ON reports(code);
 
+-- Phase 2 新增：会话元数据（thread_id 由 LangGraph Checkpointer 生成，这里只存摘要，
+-- 完整对话 transcript 在 Checkpointer 里，不在业务库重复存一份）
+CREATE TABLE IF NOT EXISTS sessions (
+    thread_id    TEXT PRIMARY KEY,
+    username     TEXT NOT NULL,
+    title        TEXT,
+    first_question TEXT,
+    intent       TEXT,
+    pending      INTEGER NOT NULL DEFAULT 0,
+    turns_count  INTEGER NOT NULL DEFAULT 0,
+    last_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    created_at   TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_last ON sessions(username, last_at DESC);
+
+-- Phase 2 新增：用户自建书签（关键问答摘录 + 引用源快照）
+CREATE TABLE IF NOT EXISTS bookmarks (
+    bookmark_id TEXT PRIMARY KEY,
+    username    TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    thread_id   TEXT,
+    question    TEXT,
+    answer_excerpt TEXT,
+    citation_refs TEXT,
+    note        TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(username, created_at DESC);
+
+-- Phase 2 新增：入库批次记录（wizard 每点一次 commit 落一条）
+CREATE TABLE IF NOT EXISTS ingest_batches (
+    batch_id      TEXT PRIMARY KEY,
+    operator      TEXT NOT NULL,
+    plan_json     TEXT NOT NULL,
+    selected_json TEXT,
+    rows_ingested INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    error_note    TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    committed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_batches_operator ON ingest_batches(operator, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
     log_id      INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -117,6 +160,7 @@ CREATE TABLE IF NOT EXISTS users (
 # - DOUBLE 对应 SQLite 的 REAL
 
 SCHEMA_MYSQL_TABLES = [
+    # --- Phase 0: 原有表 ---
     """
     CREATE TABLE IF NOT EXISTS companies (
         code       VARCHAR(16) PRIMARY KEY,
@@ -178,9 +222,6 @@ SCHEMA_MYSQL_TABLES = [
         created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
-    # 与 SQLite 版的差异：INTEGER→TINYINT（布尔）、TEXT 主键要指定长度才能建索引、
-    # 时间列 DATETIME DEFAULT CURRENT_TIMESTAMP。username 的唯一性用**具名**表级
-    # UNIQUE KEY 声明（具名是为了冲突报错里能看出是哪条约束，也便于日后 DROP INDEX）。
     """
     CREATE TABLE IF NOT EXISTS users (
         user_id       VARCHAR(64) PRIMARY KEY,
@@ -194,6 +235,49 @@ SCHEMA_MYSQL_TABLES = [
         UNIQUE KEY uk_users_username (username)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
+    # --- Phase 2 新增 ---
+    """
+    CREATE TABLE IF NOT EXISTS sessions (
+        thread_id      VARCHAR(128) PRIMARY KEY,
+        username       VARCHAR(128) NOT NULL,
+        title          VARCHAR(512) NULL,
+        first_question VARCHAR(1024) NULL,
+        intent         VARCHAR(64) NULL,
+        pending        TINYINT NOT NULL DEFAULT 0,
+        turns_count    INT NOT NULL DEFAULT 0,
+        last_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_sessions_user_last (username, last_at DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS bookmarks (
+        bookmark_id   VARCHAR(64) PRIMARY KEY,
+        username      VARCHAR(128) NOT NULL,
+        label         VARCHAR(64) NOT NULL,
+        thread_id     VARCHAR(128) NULL,
+        question      VARCHAR(1024) NULL,
+        answer_excerpt MEDIUMTEXT NULL,
+        citation_refs MEDIUMTEXT NULL,
+        note          TEXT NULL,
+        created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_bookmarks_user (username, created_at DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ingest_batches (
+        batch_id      VARCHAR(64) PRIMARY KEY,
+        operator      VARCHAR(128) NOT NULL,
+        plan_json     MEDIUMTEXT NOT NULL,
+        selected_json MEDIUMTEXT NULL,
+        rows_ingested INT NOT NULL DEFAULT 0,
+        status        VARCHAR(32) NOT NULL DEFAULT 'pending',
+        error_note    TEXT NULL,
+        created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        committed_at  DATETIME NULL,
+        INDEX idx_ingest_batches_operator (operator, created_at DESC)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
 ]
 
 SCHEMA_MYSQL_INDEXES = [
@@ -204,7 +288,7 @@ SCHEMA_MYSQL_INDEXES = [
 
 # 清库顺序无关紧要（无强外键），但要覆盖全部业务表
 ALL_TABLES = ("financial_indicators", "reports", "companies", "audit_logs", "golden_qa",
-              "users")
+              "users", "sessions", "bookmarks", "ingest_batches")
 
 
 # ==================== 连接层 ====================
@@ -464,6 +548,192 @@ def reset_business_tables() -> None:
         raw.commit()
     finally:
         raw.close()
+
+
+# ==================== Phase 2: sessions CRUD ====================
+
+def upsert_session(thread_id: str, username: str, *,
+                   title: str | None = None,
+                   first_question: str | None = None,
+                   intent: str | None = None,
+                   pending: bool | None = None,
+                   turns_delta: int = 0,
+                   db_path: Path | None = None) -> None:
+    """会话 upsert（thread_id 由 LangGraph Checkpointer 生成）。
+
+    第一次写入：INSERT。后续写入：title/first_question 不覆盖（首次设好就定了）；
+    pending 显式传才覆盖；turns_delta 做累加；last_at 刷新。
+    """
+    with get_conn(db_path) as conn:
+        existing = conn.execute(
+            "SELECT title, first_question, turns_count FROM sessions WHERE thread_id = ?",
+            (thread_id,)).fetchone()
+        if existing is None:
+            conn.execute(
+                f"""INSERT INTO sessions
+                    (thread_id, username, title, first_question, intent, pending, turns_count, last_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, {now_expr()})""",
+                (thread_id, username, title, first_question, intent,
+                 1 if pending is True else 0, max(turns_delta, 0)))
+        else:
+            prev = existing
+            new_turns = (prev["turns_count"] if isinstance(prev, dict) else prev[2]) + turns_delta
+            sql_parts: list[str] = [f"last_at = {now_expr()}"]
+            params: list = []
+            if intent is not None:
+                sql_parts.append("intent = ?"); params.append(intent)
+            if pending is not None:
+                sql_parts.append("pending = ?"); params.append(1 if pending else 0)
+            if turns_delta != 0:
+                sql_parts.append("turns_count = ?"); params.append(new_turns)
+            sql_parts.append("title = COALESCE(title, ?)"); params.append(title)
+            sql_parts.append("first_question = COALESCE(first_question, ?)"); params.append(first_question)
+            params.append(thread_id)
+            conn.execute(f"UPDATE sessions SET {', '.join(sql_parts)} WHERE thread_id = ?", params)
+
+
+def list_sessions(username: str, *, limit: int = 50,
+                  q: str | None = None, db_path: Path | None = None) -> list[dict]:
+    """列出用户自己的会话，按 last_at DESC。q 做 title/first_question LIKE。"""
+    with get_conn(db_path) as conn:
+        if q:
+            pat = f"%{q}%"
+            rows = conn.execute(
+                """SELECT thread_id, title, first_question, intent, pending,
+                          turns_count, last_at, created_at
+                   FROM sessions WHERE username = ?
+                     AND (title LIKE ? OR first_question LIKE ?)
+                   ORDER BY last_at DESC LIMIT ?""",
+                (username, pat, pat, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT thread_id, title, first_question, intent, pending,
+                          turns_count, last_at, created_at
+                   FROM sessions WHERE username = ?
+                   ORDER BY last_at DESC LIMIT ?""",
+                (username, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_session(thread_id: str, db_path: Path | None = None) -> dict | None:
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            """SELECT thread_id, username, title, first_question, intent, pending,
+                      turns_count, last_at, created_at
+               FROM sessions WHERE thread_id = ?""", (thread_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_session(thread_id: str, username: str, db_path: Path | None = None) -> bool:
+    """删除会话（只删元数据；Checkpointer 里的 transcript 不碰 —— 那边是独立后端）。
+    调用方必须同时传 username 做归属校验。
+    返回 True=真删掉了；False=thread_id 不存在或归属不匹配。
+    """
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM sessions WHERE thread_id = ? AND username = ?",
+            (thread_id, username))
+    return cur.rowcount > 0
+
+
+# ==================== Phase 2: bookmarks CRUD ====================
+
+def add_bookmark(bookmark_id: str, username: str, label: str, *,
+                 thread_id: str | None = None,
+                 question: str | None = None,
+                 answer_excerpt: str | None = None,
+                 citation_refs: str | None = None,
+                 note: str | None = None,
+                 db_path: Path | None = None) -> None:
+    with get_conn(db_path) as conn:
+        conn.execute(
+            """INSERT INTO bookmarks
+               (bookmark_id, username, label, thread_id, question, answer_excerpt,
+                citation_refs, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (bookmark_id, username, label, thread_id, question,
+             answer_excerpt, citation_refs, note))
+
+
+def list_bookmarks(username: str, *, limit: int = 100,
+                   db_path: Path | None = None) -> list[dict]:
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT bookmark_id, label, thread_id, question, answer_excerpt,
+                      citation_refs, note, created_at
+               FROM bookmarks WHERE username = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (username, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_bookmark(bookmark_id: str, username: str,
+                    db_path: Path | None = None) -> bool:
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM bookmarks WHERE bookmark_id = ? AND username = ?",
+            (bookmark_id, username))
+    return cur.rowcount > 0
+
+
+# ==================== Phase 2: ingest_batches CRUD ====================
+
+def insert_ingest_batch(batch_id: str, operator: str, plan_json: str, *,
+                        status: str = "pending",
+                        db_path: Path | None = None) -> None:
+    with get_conn(db_path) as conn:
+        conn.execute(
+            f"""INSERT INTO ingest_batches (batch_id, operator, plan_json, status)
+                VALUES (?, ?, ?, ?)""",
+            (batch_id, operator, plan_json, status))
+
+
+def update_ingest_batch(batch_id: str, *,
+                        selected_json: str | None = None,
+                        rows_ingested: int | None = None,
+                        status: str | None = None,
+                        error_note: str | None = None,
+                        committed: bool = False,
+                        db_path: Path | None = None) -> None:
+    with get_conn(db_path) as conn:
+        cur = conn.execute("SELECT 1 FROM ingest_batches WHERE batch_id = ?", (batch_id,))
+        if cur.fetchone() is None:
+            return
+        sets: list[str] = []
+        params: list = []
+        if selected_json is not None:
+            sets.append("selected_json = ?"); params.append(selected_json)
+        if rows_ingested is not None:
+            sets.append("rows_ingested = ?"); params.append(rows_ingested)
+        if status is not None:
+            sets.append("status = ?"); params.append(status)
+        if error_note is not None:
+            sets.append("error_note = ?"); params.append(error_note)
+        if committed:
+            sets.append(f"committed_at = {now_expr()}")
+        if not sets:
+            return
+        params.append(batch_id)
+        conn.execute(
+            f"UPDATE ingest_batches SET {', '.join(sets)} WHERE batch_id = ?", params)
+
+
+def list_ingest_batches(operator: str | None = None, *,
+                         limit: int = 50,
+                         db_path: Path | None = None) -> list[dict]:
+    with get_conn(db_path) as conn:
+        if operator:
+            rows = conn.execute(
+                """SELECT batch_id, operator, status, rows_ingested, created_at, committed_at
+                   FROM ingest_batches WHERE operator = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (operator, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT batch_id, operator, status, rows_ingested, created_at, committed_at
+                   FROM ingest_batches ORDER BY created_at DESC LIMIT ?""",
+                (limit,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 if __name__ == "__main__":

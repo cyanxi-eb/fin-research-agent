@@ -10,6 +10,7 @@ import ChatPage from './pages/ChatPage'
 const ComparePage = lazy(() => import('./pages/ComparePage'))
 const IngestPage = lazy(() => import('./pages/IngestPage'))
 import { useAuthStore } from './store/authStore'
+import { useSessionStore } from './store/sessionStore'
 import { http } from './api/client'
 
 /**
@@ -21,6 +22,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const logout = useAuthStore((s) => s.logout)
   const navigate = useNavigate()
   const [checking, setChecking] = useState(true)
+  const sessionInit = useSessionStore((s) => s.init)
 
   useEffect(() => {
     if (!accessToken) {
@@ -28,10 +30,13 @@ function RequireAuth({ children }: { children: ReactNode }) {
       return
     }
     http.get('/api/auth/me')
-      .then(() => setChecking(false))
+      .then(() => {
+        // Phase 2 批次 1：登录后从后端拉一次会话列表（替换 localStorage 降级缓存）
+        void sessionInit()
+      })
       .catch(() => { logout(); navigate('/login', { replace: true }) })
       .finally(() => setChecking(false))
-  }, [accessToken, logout, navigate])
+  }, [accessToken, logout, navigate, sessionInit])
 
   if (checking) return <div style={{ padding: 40, color: '#888' }}>验证中…</div>
   if (!accessToken) return <Navigate to="/login" replace />

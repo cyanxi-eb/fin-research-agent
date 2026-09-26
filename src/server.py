@@ -92,6 +92,14 @@ app.include_router(compare_route.router)
 app.include_router(ingest_route.router)
 app.include_router(audit_route.router)
 
+# === Phase 2: 新增会话/书签/入库批次路由组 ===
+from src.api.routes import sessions as sessions_route
+from src.api.routes import bookmarks as bookmarks_route
+from src.api.routes import ingest_batches as ingest_batches_route
+app.include_router(sessions_route.router)
+app.include_router(bookmarks_route.router)
+app.include_router(ingest_batches_route.router)
+
 @app.get("/assets/{fname}")
 def serve_asset(fname: str) -> FileResponse:
     fpath = WEB_DIR / "assets" / fname
