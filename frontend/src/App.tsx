@@ -6,6 +6,8 @@ import zhCN from 'antd/locale/zh_CN'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import ChatPage from './pages/ChatPage'
+import ComparePage from './pages/ComparePage'
+import IngestPage from './pages/IngestPage'
 import { useAuthStore } from './store/authStore'
 import { http } from './api/client'
 
@@ -56,6 +58,8 @@ function AppRoutes() {
         }
       >
         <Route path="/" element={<ChatPage />} />
+        <Route path="/compare" element={<ComparePage />} />
+        <Route path="/ingest" element={<IngestPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
