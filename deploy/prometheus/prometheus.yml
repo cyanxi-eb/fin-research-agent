@@ -1,0 +1,12 @@
+# Prometheus 配置 — 采集 Fin Research Agent 的 /api/metrics
+scrape_configs:
+  - job_name: "fin-research-agent"
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ["app:8000"]
+        labels:
+          service: "fin-research-agent"
+          env: "docker-compose"
+    # 30s 采集频率（足够；这个服务请求量不高）
+    scrape_interval: 30s
+    scrape_timeout: 5s
