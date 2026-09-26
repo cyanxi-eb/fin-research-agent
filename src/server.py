@@ -27,6 +27,8 @@ from src import audit as audit_mod
 from src import auth as auth_mod
 from src import config, db, llm
 from src.api import response as response_mod
+from src.api import ratelimit as ratelimit_mod
+from src import logging_setup
 from src.api.routes import ask as ask_route
 from src.api.routes import audit as audit_route
 from src.api.routes import auth as auth_route
@@ -46,13 +48,15 @@ FRONTEND_INDEX = WEB_DIR / "index.html"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    logging_setup.setup_logging()
+    logger = logging_setup.get_logger("startup")
     if config.AUTH_ENABLED:
         auth_mod.require_jwt_secret()
         db.init_schema()
-        print(f"[auth] 演示账号：{auth_mod.ensure_seed_admin()}"
-              f"（用户 {config.SEED_ADMIN_USER}）")
+        admin_user = auth_mod.ensure_seed_admin()
+        logger.info("auth enabled, demo admin ready", extra_fields={"admin_user": admin_user})
     else:
-        print("[auth] FA_AUTH_ENABLED=0：业务端点不校验令牌（单机/单测形态）。")
+        logger.info("auth disabled, anonymous mode")
     yield
 
 
@@ -76,24 +80,25 @@ async def _request_id_middleware(request: Request, call_next):
         or uuid.uuid4().hex
     )
     request.state.request_id = request_id
+    logging_setup.set_trace_id(request_id)
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response
 
 
-# ==================== API version rewrite ====================
-# /api/v1/* → /api/* 路径重写。后端路由模块保持 /api/xxx 完整路径不变，
-# 旧客户端走 /api/xxx 不崩（rewrite middleware 只处理 v1 前缀的请求）。
-# 必须在 envelope middleware 之前注册（洋葱模型最外层先执行）。
-app.middleware("http")(response_mod.api_version_rewrite_middleware)
+# ==================== Middleware 注册（洋葱模型，后注册 = 最外层最先执行）====================
+# 期望执行顺序：RequestId → VersionRewrite → RateLimit → Envelope → endpoint
+# 所以注册顺序反过来：Envelope → RateLimit → VersionRewrite → RequestId
 
-
-# ==================== Response envelope middleware + exception handler ====================
-# Phase 0-2 响应归一 — 特性开关 FA_RESPONSE_ENVELOPE=1 时启用
-# 洋葱模型顺序：RequestId pre → VersionRewrite pre → Envelope pre → endpoint →
-#               Envelope post → VersionRewrite post（透传）→ RequestId post（加 header）
+# 4. Envelope（最内层中间件，离 endpoint 最近）
 app.middleware("http")(response_mod.response_envelope_middleware)
 app.add_exception_handler(HTTPException, response_mod.http_exception_handler_envelope)
+
+# 3. RateLimit
+app.middleware("http")(ratelimit_mod.rate_limit_middleware)
+
+# 2. API version rewrite（/api/v1/* → /api/*，必须在 RateLimit 之前生效）
+app.middleware("http")(response_mod.api_version_rewrite_middleware)
 
 
 # --- Phase 1 React 前端静态资源 + SPA fallback ---
