@@ -60,3 +60,17 @@ seed/data/index/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+
+# ---- 工作记录 / 临时方案（不入库）----
+docs/                                    # 所有 plans/designs/verify 工作记录
+企业级落地方案.md                         # 私人方案草稿
+项目讲解稿.md                            # 私人场景化内容
+完善计划.md                              # 私人 roadmap
+项目总结.md                              # 私人项目总结
+Step5-设计要点.md                        # 私人设计笔记
+不足清单与处置方案.md                     # 私人不足登记
+
+# ---- Qdrant 本地部署数据 ----
+C:/qdrant/
+./qdrant/
+
