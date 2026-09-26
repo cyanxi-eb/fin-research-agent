@@ -39,7 +39,6 @@ data/web_corpus/
 data/regulation/raw/
 
 # ---- 数据产物（原始文档 / 解析中间件 / 索引 / 向量 / DB） ----
-# 这些体积大且可通过 scripts/ingest_all.py 重建
 data/raw/
 data/parsed/
 data/index/
@@ -49,7 +48,7 @@ data/db/
 *.db-*
 *.pkl
 
-# ---- seed/ 下可重建的大体积产物（保留 seed/business.json 和目录结构） ----
+# ---- seed/ 下可重建的大体积产物 ----
 seed/data/vector/
 seed/data/parsed/
 seed/data/index/
@@ -57,13 +56,7 @@ seed/data/index/
 # ---- 外部嵌入 git 仓库（如有） ----
 .git/modules/
 
-不足清单与处置方案.md
-架构设计文档-金融财报分析Agent-v1.0.md
-企业级落地方案.md
-实施方案-金融财报分析Agent-v0.1.md
-完善计划.md
-项目讲解稿.md
-项目总结.md
-CHANGELOG.md
-EXTENSION.md
-Step5-设计要点.md
+# ---- Phase 1 React 前端 ----
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

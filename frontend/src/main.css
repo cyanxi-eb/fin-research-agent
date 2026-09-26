@@ -1,0 +1,22 @@
+/* 批次 1 全局基线样式。深浅色跟随 antd ConfigProvider。
+   design token 只放一层 CSS 变量让 Layout / HealthBar 用，
+   具体组件样式全部用 antd token。 */
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #f0f0f0;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: #1f2430;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+}
