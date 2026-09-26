@@ -1,0 +1,1 @@
+:root{--bg:#f6f7f9;--panel:#fff;--border:#f0f0f0}html,body,#root{background:var(--bg);color:#1f2430;height:100%;margin:0;font-family:Segoe UI,Microsoft YaHei,system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.6}code{font-family:Consolas,Cascadia Mono,monospace}

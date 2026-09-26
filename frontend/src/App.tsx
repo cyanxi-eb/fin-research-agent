@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { App as AntdApp, ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
@@ -6,8 +6,9 @@ import zhCN from 'antd/locale/zh_CN'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import ChatPage from './pages/ChatPage'
-import ComparePage from './pages/ComparePage'
-import IngestPage from './pages/IngestPage'
+// 批次 5: code splitting — compare / ingest 是低频页面，用 lazy + Suspense 拆独立 chunk
+const ComparePage = lazy(() => import('./pages/ComparePage'))
+const IngestPage = lazy(() => import('./pages/IngestPage'))
 import { useAuthStore } from './store/authStore'
 import { http } from './api/client'
 
@@ -58,8 +59,16 @@ function AppRoutes() {
         }
       >
         <Route path="/" element={<ChatPage />} />
-        <Route path="/compare" element={<ComparePage />} />
-        <Route path="/ingest" element={<IngestPage />} />
+        <Route path="/compare" element={
+          <Suspense fallback={<div style={{ padding: 40, color: '#888' }}>加载中…</div>}>
+            <ComparePage />
+          </Suspense>
+        } />
+        <Route path="/ingest" element={
+          <Suspense fallback={<div style={{ padding: 40, color: '#888' }}>加载中…</div>}>
+            <IngestPage />
+          </Suspense>
+        } />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

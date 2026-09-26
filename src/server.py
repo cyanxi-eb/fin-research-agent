@@ -80,7 +80,9 @@ async def _request_id_middleware(request: Request, call_next):
     return response
 
 
-app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+# --- Phase 1 React 前端静态资源 + SPA fallback ---
+# 旧单文件 index.html 已由 Vite 产物替换（web/assets/index-*.js + index.html）
+# /api/* 路由组在上方已显式注册，优先匹配；这里只处理前端静态 + SPA fallback
 
 # === Phase 0-2: 迁移到 src/api/routes/ 的路由组 ===
 app.include_router(auth_route.router)
@@ -90,10 +92,22 @@ app.include_router(compare_route.router)
 app.include_router(ingest_route.router)
 app.include_router(audit_route.router)
 
+@app.get("/assets/{fname}")
+def serve_asset(fname: str) -> FileResponse:
+    fpath = WEB_DIR / "assets" / fname
+    if not fpath.is_file():
+        raise HTTPException(status_code=404, detail=f"静态资源不存在：{fname}")
+    return FileResponse(str(fpath))
 
-# ==================== root page ====================
+
+@app.get("/favicon.svg")
+def serve_favicon() -> FileResponse:
+    return FileResponse(str(WEB_DIR / "favicon.svg"), media_type="image/svg+xml")
+
+
 @app.get("/")
 def api_index() -> FileResponse:
+    """前端根 — 返回 Vite 产物 index.html。"""
     if not FRONTEND_INDEX.exists():
         raise HTTPException(status_code=404, detail="前端未构建：web/index.html 不存在")
     return FileResponse(str(FRONTEND_INDEX), media_type="text/html")
@@ -138,6 +152,21 @@ def api_health() -> dict:
         "retrieve_mode_default": config.RETRIEVE_MODE,
         "intents": sorted(router_mod.INTENTS),
     }
+
+
+# ==================== SPA fallback（必须放最后，所有具体路由先匹配） ====================
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str) -> FileResponse:
+    """SPA fallback：任何不是 /api/* /assets/* /favicon.svg 的路径都回 index.html。
+
+    这样浏览器直接访问 http://host/compare 时，前端 Router 能正常接管；
+    /api/* 已被上方的 include_router 先匹配，不会走到这里。
+    """
+    if full_path.startswith("api/") or full_path == "api":
+        raise HTTPException(status_code=404, detail=f"API 端点不存在：/{full_path}")
+    if not FRONTEND_INDEX.exists():
+        raise HTTPException(status_code=404, detail="前端未构建：web/index.html 不存在")
+    return FileResponse(str(FRONTEND_INDEX), media_type="text/html")
 
 
 if __name__ == "__main__":
