@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from src import audit as audit_mod
 from src import auth as auth_mod
 from src import config, db, llm
+from src.api import response as response_mod
 from src.api.routes import ask as ask_route
 from src.api.routes import audit as audit_route
 from src.api.routes import auth as auth_route
@@ -78,6 +79,14 @@ async def _request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-Id"] = request_id
     return response
+
+
+# ==================== Response envelope middleware + exception handler ====================
+# Phase 0-2 响应归一 — 特性开关 FA_RESPONSE_ENVELOPE=1 时启用
+# 洋葱模型顺序：RequestId pre（写 state）→ Envelope pre（放行）→ endpoint →
+#               Envelope post（读 state + 包壳）→ RequestId post（加 header）
+app.middleware("http")(response_mod.response_envelope_middleware)
+app.add_exception_handler(HTTPException, response_mod.http_exception_handler_envelope)
 
 
 # --- Phase 1 React 前端静态资源 + SPA fallback ---
