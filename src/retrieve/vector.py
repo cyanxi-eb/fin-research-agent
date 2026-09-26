@@ -20,7 +20,7 @@ import numpy as np
 
 from src import config
 from src.embedding import EmbeddingUnavailable, active_spec, embed_query, embedding_ready
-from src.ingest import index_vector
+from src.retrieve.vector_store import VectorStore
 
 # 查询向量缓存（LRU）。**评测时这一点很关键**：Step3/Step4 两轮跑同一批问题，
 # 缓存保证两轮用的是同一份查询向量，差异只来自检索策略而不是 embedding 抖动。
@@ -46,26 +46,28 @@ def clear_query_cache() -> None:
 
 
 class VectorIndex:
-    """向量索引：归一化矩阵 + 行对齐的元数据。
+    """向量索引门面 —— 持有 `VectorStore` 实例，对外提供 search / stats。
 
-    元数据在加载时**摊平成 numpy 数组**（`_codes/_years/_sections`）：
-    过滤是每次查询都要做的热路径，对 2650 条 Python dict 逐条比较不值得。
+    查询向量 LRU 缓存在这里（评测关键：两轮跑同问题要用同一份查询向量，
+    差异只来自检索策略而不是 embedding 抖动）。实际的矩阵操作、过滤、
+    argpartition 全在 VectorStore 实现里 —— 批次 3 切 Qdrant 不影响本类。
     """
 
-    def __init__(self, matrix: np.ndarray, meta: list[dict], manifest: dict):
-        self.matrix = matrix
-        self.meta = meta
-        self.manifest = manifest
-        # 用 dtype=object 存字符串，缺失值统一成 ""（而不是 None）——
-        # 这样比较时不用到处判 None，`"" == "600519"` 自然为 False
-        self._codes = np.array([str(m.get("code") or "") for m in meta], dtype=object)
-        self._sections = np.array([str(m.get("section") or "") for m in meta], dtype=object)
-        self._years = np.array([int(m.get("year") or 0) for m in meta], dtype=np.int64)
+    def __init__(self, store_or_matrix, *args):
+        """兼容两种构造方式：
+
+        - 新方式：VectorIndex(VectorStore)
+        - 旧方式（测试用）：VectorIndex(matrix, meta, manifest)
+        """
+        if args:
+            from src.retrieve.vector_store import NumpyVectorStore
+            self._store = NumpyVectorStore(store_or_matrix, args[0], args[1])
+        else:
+            self._store = store_or_matrix
 
     @classmethod
     def load(cls) -> "VectorIndex":
-        mat, meta, manifest = index_vector.load()
-        return cls(mat, meta, manifest)
+        return cls(VectorStore.load())
 
     # ---------- 检索 ----------
 
@@ -77,66 +79,18 @@ class VectorIndex:
         **过滤在打分之后、截断之前**，与 `BM25Index.search` 同规则 ——
         否则"限定公司后取 top5"会静默变成"全局 top5 里筛出 2 条"。
         """
-        topk = topk or config.RETRIEVE_TOPK
-        if self.matrix.shape[0] == 0:
-            return []
-
         q = _cached_query_vector(query)
-        if q.shape[0] != self.matrix.shape[1]:
-            raise RuntimeError(
-                f"查询向量维度 {q.shape[0]} 与索引维度 {self.matrix.shape[1]} 不符"
-                f"（当前模型 {active_spec().get('model')}，"
-                f"建库模型 {self.manifest.get('model')}）—— 向量库需重建")
-
-        rows = np.arange(self.matrix.shape[0])
-        if code:
-            rows = rows[self._codes[rows] == str(code)]
-        if year:
-            rows = rows[self._years[rows] == int(year)]
-        if section:
-            # 子串匹配（与 BM25 一致）：调用方可能只给"财务报告"这种大节名
-            rows = rows[np.array([str(section) in s for s in self._sections[rows]],
-                                 dtype=bool)]
-        if rows.size == 0:
-            return []
-
-        scores = self.matrix[rows] @ q
-        keep = rows[scores > config.VECTOR_MIN_SCORE]
-        if keep.size == 0:
-            return []
-        keep_scores = self.matrix[keep] @ q
-
-        k = min(topk, keep.size)
-        # argpartition 只要 top-k 不要求全序 → O(n)。2650 条虽然也不慢，
-        # 但过滤到公司维度后集合会变，用同一套写法更稳。
-        part = np.argpartition(-keep_scores, k - 1)[:k]
-        order = part[np.argsort(-keep_scores[part], kind="stable")]
-
-        hits: list[dict] = []
-        for rank, i in enumerate(order, start=1):
-            m = self.meta[int(keep[i])]
-            hits.append({
-                "chunk_id": m.get("chunk_id"),
-                "score": round(float(keep_scores[i]), 6),
-                "cosine": round(float(keep_scores[i]), 6),
-                "rank": rank,
-                "code": m.get("code"), "company": m.get("company"),
-                "year": m.get("year"), "page_no": m.get("page_no"),
-                "section": m.get("section"), "part": m.get("part"),
-                "parts_total": m.get("parts_total"),
-            })
-        return hits
+        return self._store.search(
+            q, topk=topk or config.RETRIEVE_TOPK,
+            code=code, year=year, section=section,
+            min_score=config.VECTOR_MIN_SCORE,
+        )
 
     def stats(self) -> dict:
-        return {
-            "vectors": int(self.matrix.shape[0]),
-            "dim": int(self.matrix.shape[1]) if self.matrix.ndim == 2 else 0,
-            "model": self.manifest.get("model"),
-            "backend": self.manifest.get("backend"),
-            "companies": len({m.get("code") for m in self.meta}),
-            "company_years": len({(m.get("code"), m.get("year")) for m in self.meta}),
-            "built_at": self.manifest.get("built_at"),
-        }
+        return self._store.stats()
+
+    def manifest(self) -> dict:
+        return self._store.manifest()
 
 
 def get_index() -> VectorIndex:
@@ -166,7 +120,7 @@ def status() -> dict:
         spec = active_spec()
     except EmbeddingUnavailable as e:
         return {"available": False, "reason": str(e), "stage": "channel"}
-    ok, why = index_vector.verify_against(spec)
+    ok, why = VectorStore.verify_against(spec)
     if not ok:
         return {"available": False, "reason": why, "stage": "manifest"}
     try:
