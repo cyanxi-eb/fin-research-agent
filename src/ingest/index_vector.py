@@ -172,10 +172,73 @@ def build(chunks: list[dict] | None = None, *, force: bool = False,
     PART_PATH.unlink(missing_ok=True)
     PART_STATE_PATH.unlink(missing_ok=True)
 
+    # ---- Phase 2 批次 3: Qdrant 写路径分支 ----
+    # numpy 路径已经把 vectors.npy / meta.jsonl / manifest.json 写完了；
+    # qdrant 分支只是"额外 upsert 一份向量 + payload"，不替换本地文件。
+    # verify_against 双后端共用 manifest.json，所以这里写完 qdrant 也不影响校验逻辑。
+    backend = getattr(config, "VECTOR_BACKEND", "numpy")
+    if backend == "qdrant":
+        _upsert_qdrant(matrix, chunks, manifest, verbose=verbose)
+
     if verbose:
+        backend_tag = f" + qdrant" if backend == "qdrant" else ""
         print(f"  ✓ 向量库 {manifest['n']} 条 × {manifest['dim']} 维，"
-              f"{manifest['seconds']}s → {VECTORS_PATH}")
+              f"{manifest['seconds']}s → {VECTORS_PATH}{backend_tag}")
     return {"ok": True, "skipped": False, **manifest}
+
+
+def _upsert_qdrant(matrix: np.ndarray, chunks: list[dict], manifest: dict, *,
+                   verbose: bool = True) -> None:
+    """把建好的向量 upsert 到 Qdrant collection（behind config.VECTOR_BACKEND=qdrant）。
+
+    - 延迟 import qdrant_client —— 没装时 numpy 默认路径不受影响
+    - 向量是 L2 归一化的 → Qdrant Distance.COSINE 等价于 dot product（同 numpy）
+    - payload 存 meta 全字段（code/year/section/company/page_no/part/parts_total）
+    - 分批 upsert（每批 500）避免一次性 payload 过大
+    """
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, PointStruct, VectorParams
+
+    client = QdrantClient(url=config.QDRANT_URL)
+    collection_name = config.QDRANT_COLLECTION
+    dim = int(matrix.shape[1])
+
+    # 创建 collection（不存在才建）
+    collections = [c.name for c in client.get_collections().collections]
+    if collection_name not in collections:
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+        )
+        if verbose:
+            print(f"  · Qdrant collection '{collection_name}' 创建（dim={dim}, distance=COSINE）")
+
+    # 构造 points（用整数索引当 point_id；payload 存 meta 全字段包括 chunk_id）
+    # Qdrant 要求 point_id 必须是 unsigned int 或 UUID —— 我们的 chunk_id 格式是
+    # `000858-2024-p1-1` 不是合法 UUID，所以用索引 i 当 ID，chunk_id 保留在 payload。
+    points: list[PointStruct] = []
+    for i, c in enumerate(chunks):
+        meta = _meta_row(c)
+        # payload 只放非 None 字段（避免 Qdrant 存一堆 null）
+        payload = {k: v for k, v in meta.items() if v is not None}
+        points.append(PointStruct(
+            id=i,  # 整数索引 —— Qdrant 合法 ID
+            vector=matrix[i].tolist(),
+            payload=payload,
+        ))
+
+    # 分批 upsert
+    BATCH = 500
+    written = 0
+    for j in range(0, len(points), BATCH):
+        batch = points[j:j + BATCH]
+        client.upsert(collection_name=collection_name, points=batch)
+        written += len(batch)
+        if verbose:
+            print(f"    Qdrant upsert {written}/{len(points)}")
+
+    if verbose:
+        print(f"  ✓ Qdrant {collection_name} {written} 条 × {dim} 维")
 
 
 def _save_part(acc: list[np.ndarray], spec: dict, fingerprint: str) -> None:

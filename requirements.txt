@@ -37,12 +37,19 @@ langgraph-checkpoint-mysql>=3.0   # Checkpointer 外置 MySQL；需要 MySQL >= 
 PyMySQL[rsa]>=1.1                 # 必须带 [rsa]：MySQL 8 的 caching_sha2_password 非 TLS 首次认证要 RSA
 
 # ---- 检索增强（Step 4 起启用）----
-# 向量库用 numpy 精确余弦（2650×1024 ≈ 11MB，单查 <1ms）。
+# 向量库默认用 numpy 精确余弦（2650×1024 ≈ 11MB，单查 <1ms）。
+# 切 ANN 用 FA_VECTOR_BACKEND=qdrant（Phase 2 批次 3 新增）。
 # 不用 chromadb / faiss：这个量级上 ANN 只会白白引入近似召回损失，
 # 而 Step 4 的评测恰恰是在测召回变化 —— 用会丢召回的索引去测召回，基线就被污染了。
 numpy>=1.26               # 向量矩阵与相似度（rank-bm25 已隐式带，但本层直接 import，显式声明）
 # sentence-transformers>=3.0   # 仅 EMBEDDING_BACKEND=local 时需要（离线通道，要下权重）；api 通道不需要
 # chromadb>=0.5                # 数据量上万后再换 ANN 时放开；只需替换 src/retrieve/vector.py
+
+# ---- Phase 2 批次 3: Qdrant 向量数据库（behind FA_VECTOR_BACKEND=qdrant）----
+# 默认 numpy 路径不触发 qdrant-client import（VectorStore 工厂方法 + QdrantVectorStore.load()
+# 均为延迟 import），未装时 numpy 默认路径完全不受影响。
+# 切 qdrant 需同时满足：FA_VECTOR_BACKEND=qdrant + 运行中 Qdrant 服务（FA_QDRANT_URL）。
+qdrant-client>=1.10.0
 
 # ---- 评估（Step 6 起启用）----
 # 检索级评测已在 Step 4 用纯标准库 + numpy 做完（scripts/eval_retrieval.py，不调模型、零依赖）；

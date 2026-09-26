@@ -96,6 +96,15 @@ VECTOR_MIN_SCORE: float = float(os.getenv("VECTOR_MIN_SCORE", "0.0"))
 # 缓存能让两次运行**用完全相同的查询向量**，对比才公平（也省一次 API 调用）。
 VECTOR_QUERY_CACHE: int = int(os.getenv("VECTOR_QUERY_CACHE", "256"))
 
+# ---- 向量存储后端（Phase 2 批次 3）----
+# numpy  = 精确余弦 + vectors.npy + meta.jsonl + manifest.json（默认，零外部依赖）
+# qdrant = Qdrant 向量数据库（HNSW ANN + payload filter，需 FA_QDRANT_URL）
+VECTOR_BACKEND: str = (os.getenv("FA_VECTOR_BACKEND", "numpy").strip().lower() or "numpy")
+# 已实现的向量后端白名单 —— 填错要能立刻报错，而不是静默回退
+VECTOR_BACKENDS: frozenset[str] = frozenset({"numpy", "qdrant"})
+QDRANT_URL: str = os.getenv("FA_QDRANT_URL", "http://localhost:6333").strip()
+QDRANT_COLLECTION: str = os.getenv("FA_QDRANT_COLLECTION", "fin_research_vectors").strip()
+
 # ---- 法规语料（Step 5，合规核查子图）----
 #
 # **独立索引**，不混进年报索引。混进去会同时污染三样东西：
