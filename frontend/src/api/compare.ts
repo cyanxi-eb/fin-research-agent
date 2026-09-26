@@ -1,5 +1,5 @@
 /**
- * 对比 API：GET+POST /api/compare。
+ * 对比 API：GET+POST /api/v1/compare。
  *
  * 后端返回（compare.py _compare_response）：
  *   { ok, indicator, unit, rows: CompanyRow[], periods_consistent, chart: ChartPayload, note? }
@@ -45,9 +45,9 @@ export interface CompareResp {
 export function compareGet(indicator: string, codes: string[], period?: string) {
   const qs = new URLSearchParams({ indicator, codes: codes.join(',') })
   if (period) qs.set('period', period)
-  return http.get<CompareResp>(`/api/compare?${qs.toString()}`)
+  return http.get<CompareResp>(`/api/v1/compare?${qs.toString()}`)
 }
 
 export function comparePost(indicator: string, codes: string[], period?: string | null) {
-  return http.post<CompareResp>('/api/compare', { indicator, codes, period: period ?? null })
+  return http.post<CompareResp>('/api/v1/compare', { indicator, codes, period: period ?? null })
 }

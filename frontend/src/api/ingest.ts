@@ -22,13 +22,13 @@ export interface IngestPlan {
 
 export function ingestPlan(text: string) {
   // /api/ingest/plan 返回 { plan: IngestPlan, note: string | null }
-  return http.post<{ plan: IngestPlan; note: string | null }>('/api/ingest/plan', { text })
+  return http.post<{ plan: IngestPlan; note: string | null }>('/api/v1/ingest/plan', { text })
 }
 
 export function ingestPreview(plan: IngestPlan) {
-  return http.post<Record<string, unknown>>('/api/ingest/preview', plan)
+  return http.post<Record<string, unknown>>('/api/v1/ingest/preview', plan)
 }
 
 export function ingestCommit(plan: IngestPlan, selected: string[][]) {
-  return http.post<Record<string, unknown>>('/api/ingest/commit', { plan, selected })
+  return http.post<Record<string, unknown>>('/api/v1/ingest/commit', { plan, selected })
 }

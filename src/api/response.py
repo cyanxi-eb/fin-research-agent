@@ -1,18 +1,19 @@
-"""Phase 0-2 响应归一 — 中间件 + 特性开关。
+"""Phase 0-2 响应归一 + API 版本化 — 中间件 + 特性开关。
 
+## 响应信封
 特性开关：FA_RESPONSE_ENVELOPE=1 时启用响应信封 {code, msg, data, trace_id}。
 默认 OFF — 484 测试零改动、前端零崩。
 
-实现分两层，避免双重包壳：
-1. HTTPException handler — 错误响应直接包壳，写 X-Envelope: 1 标记
-2. _response_envelope_middleware — 成功响应（2xx + JSON + 无 X-Envelope 标记）统一包壳
+## API 版本化
+URL rewrite middleware：/api/v1/* → /api/*
+双路径同时可用（前端切 /api/v1，旧客户端继续走 /api 不崩）。
+后端路由模块保持 /api/xxx 完整路径不变（零改动）。
 
-skip 条件：
-- 非 /api/ 前缀（根路由 /favicon /assets / SPA fallback 不动）
-- content-type 不含 application/json（SSE、FileResponse、StaticFiles）
-- StreamingResponse（响应体流式传输）
-- 204 No Content
-- X-Envelope: 1（HTTPException handler 已包过）
+## 中间件顺序（洋葱模型，server.py 注册顺序即执行顺序）
+1. _request_id_middleware — 分配/透传 X-Request-Id
+2. _api_version_rewrite_middleware — /api/v1/* → /api/*（前置 rewrite）
+3. _response_envelope_middleware — 成功响应包壳
+4. HTTPException handler — 错误响应包壳
 """
 from __future__ import annotations
 
@@ -167,3 +168,38 @@ async def http_exception_handler_envelope(
         content=_make_envelope(code=code, msg=msg, data=None, trace_id=trace_id),
         headers={ENVELOPE_HEADER: "1", **(exc.headers or {})},
     )
+
+
+# ==================== API version rewrite ====================
+
+V1_PREFIX = "/api/v1"   # 前端新路径
+LEGACY_PREFIX = "/api"  # 后端内部路由路径（所有 APIRouter endpoint path 都从这里开始）
+
+
+async def api_version_rewrite_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """/api/v1/* → /api/* 路径重写。
+
+    FastAPI 用 request.url.path / request.scope["path"] 做路由匹配。
+    我们改 scope["path"] 就行 — 这是 Starlette ASGI 层的"真相"，
+    request.url.path 是它的只读视图（会自动同步）。
+
+    同时改 raw_path（WSGI 某些网关层会读这个），保持两者一致。
+    """
+    path = request.scope.get("path", "")
+    if path.startswith(V1_PREFIX + "/") or path == V1_PREFIX:
+        # /api/v1/auth/login → /api/auth/login
+        # /api/v1 → /api（极少用，防御性处理）
+        new_path = LEGACY_PREFIX + path[len(V1_PREFIX):]
+        request.scope["path"] = new_path
+        # raw_path 是 bytes 类型
+        raw_path = request.scope.get("raw_path")
+        if isinstance(raw_path, bytes):
+            request.scope["raw_path"] = new_path.encode("utf-8")
+
+    response = await call_next(request)
+
+    # 响应头加 V1-Accepted: 1 — 前端可以用来确认自己走的是 v1 路径
+    # 但旧客户端走 /api 时不要加这个头（零侵入）
+    return response

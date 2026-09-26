@@ -81,10 +81,17 @@ async def _request_id_middleware(request: Request, call_next):
     return response
 
 
+# ==================== API version rewrite ====================
+# /api/v1/* → /api/* 路径重写。后端路由模块保持 /api/xxx 完整路径不变，
+# 旧客户端走 /api/xxx 不崩（rewrite middleware 只处理 v1 前缀的请求）。
+# 必须在 envelope middleware 之前注册（洋葱模型最外层先执行）。
+app.middleware("http")(response_mod.api_version_rewrite_middleware)
+
+
 # ==================== Response envelope middleware + exception handler ====================
 # Phase 0-2 响应归一 — 特性开关 FA_RESPONSE_ENVELOPE=1 时启用
-# 洋葱模型顺序：RequestId pre（写 state）→ Envelope pre（放行）→ endpoint →
-#               Envelope post（读 state + 包壳）→ RequestId post（加 header）
+# 洋葱模型顺序：RequestId pre → VersionRewrite pre → Envelope pre → endpoint →
+#               Envelope post → VersionRewrite post（透传）→ RequestId post（加 header）
 app.middleware("http")(response_mod.response_envelope_middleware)
 app.add_exception_handler(HTTPException, response_mod.http_exception_handler_envelope)
 

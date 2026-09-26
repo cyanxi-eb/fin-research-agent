@@ -78,7 +78,7 @@ export default function HealthBar() {
 
   const load = async () => {
     try {
-      const j = await http.get<HealthResp>('/api/health')
+      const j = await http.get<HealthResp>('/api/v1/health')
       setData(j)
     } catch {
       setData(null)

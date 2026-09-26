@@ -230,7 +230,7 @@ export default function ChatPage() {
           }
         } else {
           // 非流式降级（批次 1 的逻辑，保留作后备）
-          const data = await http.post<FinalResponse>('/api/ask', {
+          const data = await http.post<FinalResponse>('/api/v1/ask', {
             question: trimmed,
             thread_id: threadId ?? undefined,
           })

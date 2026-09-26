@@ -29,7 +29,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
       setChecking(false)
       return
     }
-    http.get('/api/auth/me')
+    http.get('/api/v1/auth/me')
       .then(() => {
         // Phase 2 批次 1：登录后从后端拉一次会话列表（替换 localStorage 降级缓存）
         void sessionInit()

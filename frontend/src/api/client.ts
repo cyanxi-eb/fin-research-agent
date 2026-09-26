@@ -55,8 +55,31 @@ client.interceptors.request.use(
 )
 
 // --- 响应拦截 ---
+
+/** 后端 envelope 格式检测。
+ *  开启时后端返回 {code, msg, data, trace_id}；关闭时返回原始 dict。
+ *  这里统一解壳，让前端业务代码永远拿到"原始 data"，
+ *  不关心后端 envelope 开关状态。
+ */
+function _isEnvelope(body: unknown): body is { code: number; msg: string; data: unknown; trace_id: string } {
+  return (
+    !!body &&
+    typeof body === 'object' &&
+    typeof (body as Record<string, unknown>).code === 'number' &&
+    typeof (body as Record<string, unknown>).msg === 'string' &&
+    'data' in (body as Record<string, unknown>) &&
+    'trace_id' in (body as Record<string, unknown>)
+  )
+}
+
 client.interceptors.response.use(
-  (resp) => resp,
+  // 成功响应：自动解 envelope → 把 response.data 换成解壳后的原始 data
+  (resp) => {
+    if (_isEnvelope(resp.data)) {
+      resp.data = resp.data.data
+    }
+    return resp
+  },
   async (err) => {
     const original = err.config as AxiosRequestConfig & { _tried?: boolean }
     const status = err.response?.status
@@ -69,7 +92,9 @@ client.interceptors.response.use(
         if (!_refreshing) {
           _refreshing = (async () => {
             try {
-              const r = await axios.post('/api/auth/refresh', { refresh_token: refresh })
+              // 用 client.post：享受 envelope unwrap + X-Request-Id header
+              const r = await client.post('/api/v1/auth/refresh', { refresh_token: refresh })
+              // r.data 已被拦截器解壳成原始响应
               if (r.data?.access_token) {
                 useAuthStore.getState().setAuth(
                   r.data.access_token,

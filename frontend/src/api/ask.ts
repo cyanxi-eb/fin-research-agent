@@ -185,7 +185,7 @@ export async function* streamAsk(params: StreamAskParams): AsyncGenerator<SseEve
 
   let resp: Response
   try {
-    resp = await fetch('/api/ask/stream', {
+    resp = await fetch('/api/v1/ask/stream', {
       method: 'POST',
       headers,
       body: JSON.stringify(params),

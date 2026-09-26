@@ -29,7 +29,7 @@ export default function LoginPage() {
   const onFinish = async (values: { username: string; password: string }) => {
     setLoading(true)
     try {
-      const data = await http.post<LoginResp>('/api/auth/login', values)
+      const data = await http.post<LoginResp>('/api/v1/auth/login', values)
       if (data?.access_token) {
         setAuth(data.access_token, data.refresh_token, data.user ?? null)
         message.success('登录成功')
