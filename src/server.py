@@ -29,6 +29,7 @@ from src import config, db, llm
 from src.api import response as response_mod
 from src.api import ratelimit as ratelimit_mod
 from src import logging_setup
+from src import metrics as metrics_mod
 from src.api.routes import ask as ask_route
 from src.api.routes import audit as audit_route
 from src.api.routes import auth as auth_route
@@ -87,18 +88,21 @@ async def _request_id_middleware(request: Request, call_next):
 
 
 # ==================== Middleware 注册（洋葱模型，后注册 = 最外层最先执行）====================
-# 期望执行顺序：RequestId → VersionRewrite → RateLimit → Envelope → endpoint
-# 所以注册顺序反过来：Envelope → RateLimit → VersionRewrite → RequestId
+# 期望执行顺序：RequestId → Prometheus → VersionRewrite → RateLimit → Envelope → endpoint
+# 注册顺序反过来：Envelope → RateLimit → VersionRewrite → Prometheus → RequestId
 
-# 4. Envelope（最内层中间件，离 endpoint 最近）
+# 5. Envelope（最内层中间件，离 endpoint 最近）
 app.middleware("http")(response_mod.response_envelope_middleware)
 app.add_exception_handler(HTTPException, response_mod.http_exception_handler_envelope)
 
-# 3. RateLimit
+# 4. RateLimit
 app.middleware("http")(ratelimit_mod.rate_limit_middleware)
 
-# 2. API version rewrite（/api/v1/* → /api/*，必须在 RateLimit 之前生效）
+# 3. API version rewrite（/api/v1/* → /api/*，必须在 RateLimit 之前生效）
 app.middleware("http")(response_mod.api_version_rewrite_middleware)
+
+# 2. Prometheus metrics（Phase 3：自动采集所有 HTTP 请求）
+app.middleware("http")(metrics_mod.metrics_middleware)
 
 
 # --- Phase 1 React 前端静态资源 + SPA fallback ---
@@ -181,6 +185,13 @@ def api_health() -> dict:
         "retrieve_mode_default": config.RETRIEVE_MODE,
         "intents": sorted(router_mod.INTENTS),
     }
+
+
+# ==================== Prometheus metrics endpoint（Phase 3）====================
+@app.get("/api/metrics")
+def api_metrics():
+    """GET /api/metrics → Prometheus text exposition format。"""
+    return metrics_mod.metrics_endpoint()
 
 
 # ==================== SPA fallback（必须放最后，所有具体路由先匹配） ====================

@@ -1,0 +1,197 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "panels": [
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {"unit": "short"},
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+          "id": 2,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {"expr": "sum(rate(http_requests_total[5m]))", "refId": "A"}
+          ],
+          "title": "Requests/sec (all)",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {"unit": "short"},
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+          "id": 3,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "targets": [
+            {"expr": "sum(rate(http_requests_total{status_code=~\"2..\"}[5m]))", "refId": "A"}
+          ],
+          "title": "2xx / sec",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {
+              "mode": "absolute",
+              "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]
+            }},
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+          "id": 4,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "targets": [
+            {"expr": "sum(rate(http_requests_total{status_code=~\"5..\"}[5m]))", "refId": "A"}
+          ],
+          "title": "5xx / sec (error)",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {"unit": "short"},
+            "overrides": []
+          },
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+          "id": 5,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          },
+          "targets": [
+            {"expr": "llm_calls_total{status=\"ok\"}", "refId": "A"}
+          ],
+          "title": "LLM calls (success)",
+          "type": "stat"
+        }
+      ],
+      "title": "Overview",
+      "type": "row"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "id": 10,
+      "panels": [
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "id": 11,
+          "targets": [
+            {"expr": "sum(rate(http_requests_total[5m])) by (path, status_code)", "legendFormat": "{{path}} {{status_code}}", "refId": "A"}
+          ],
+          "title": "Requests by path + status",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "id": 12,
+          "targets": [
+            {"expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path))", "legendFormat": "p95 {{path}}", "refId": "A"},
+            {"expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path))", "legendFormat": "p50 {{path}}", "refId": "B"}
+          ],
+          "title": "Request latency (p50/p95)",
+          "type": "timeseries"
+        }
+      ],
+      "title": "HTTP Traffic",
+      "type": "row"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+      "id": 20,
+      "panels": [
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "id": 21,
+          "targets": [
+            {"expr": "sum(rate(llm_calls_total[5m])) by (provider, model, status)", "legendFormat": "{{provider}}/{{model}} {{status}}", "refId": "A"}
+          ],
+          "title": "LLM calls rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "id": 22,
+          "targets": [
+            {"expr": "histogram_quantile(0.95, sum(rate(llm_duration_seconds_bucket[5m])) by (le, provider, model))", "legendFormat": "p95 {{provider}}/{{model}}", "refId": "A"}
+          ],
+          "title": "LLM latency p95",
+          "type": "timeseries"
+        }
+      ],
+      "title": "LLM",
+      "type": "row"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["fin-research", "agent"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Fin Research Agent — Overview",
+  "uid": "fin-research-agent",
+  "version": 1
+}
