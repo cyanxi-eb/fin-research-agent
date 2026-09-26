@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import {
   Button, Input, Card, Space, Alert, Tag, Empty, Typography, App as AntdApp,
 } from 'antd'
@@ -9,6 +10,7 @@ import type { FinalResponse, MetaEvent, Citation, HitlResult } from '../api/ask'
 import { hitlConfirm, hitlStatus } from '../api/hitl'
 import { http } from '../api/client'
 import { useAuthStore } from '../store/authStore'
+import { useSessionStore, makeTitle } from '../store/sessionStore'
 
 const { TextArea } = Input
 const { Title, Text, Paragraph } = Typography
@@ -53,6 +55,64 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
 
+  // 批次 3：Layout 通过 Outlet context 传递的信号
+  const ctx = useOutletContext<{
+    replaySignal?: { threadId: string; nonce: number } | null
+    newSignal?: number
+  }>()
+  const sessionUpsert = useSessionStore((s) => s.upsert)
+  const sessionTouch = useSessionStore((s) => s.touch)
+
+  // ---- 回看 / 新会话 ----
+  useEffect(() => {
+    if (ctx?.newSignal && ctx.newSignal > 0) {
+      setTurns([])
+      setThreadId(null)
+      setLoading(false)
+      abortRef.current?.abort()
+    }
+  }, [ctx?.newSignal])
+
+  useEffect(() => {
+    const rp = ctx?.replaySignal
+    if (!rp || !rp.threadId) return
+    // 调 /api/hitl/{id} 拿终态（agent_status 返回 response 字段 = FinalResponse）
+    ;(async () => {
+      try {
+        const st = await hitlStatus(rp.threadId)
+        if (!st.found) {
+          message.warning(`会话不存在（thread_id=${rp.threadId}）`)
+          return
+        }
+        setThreadId(rp.threadId)
+        const resp = (st.response ?? {}) as FinalResponse
+        // 重建 turns：只有终态 response（Checkpointer 只存状态快照，不存多轮 transcript）
+        // 批次 3 能看到这一轮完整回答 + 引用 + HITL 状态；多轮历史后续扩展
+        const reconstructed: Turn[] = []
+        // 如果有 question 字段，先放 user turn
+        const questionText =
+          (resp as Record<string, unknown>)?.question as string | undefined
+        if (questionText) reconstructed.push({ role: 'user', content: questionText })
+        reconstructed.push({
+          role: 'assistant',
+          content: resp.answer ?? '',
+          final: resp,
+          citations: resp.citations,
+          verify: resp.verify ?? null,
+          web: resp.web ?? null,
+          hitl: resp.hitl ?? null,
+          streaming: false,
+        })
+        setTurns(reconstructed)
+      } catch (err) {
+        message.error(
+          (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+            '回看失败',
+        )
+      }
+    })()
+  }, [ctx?.replaySignal?.nonce, ctx?.replaySignal?.threadId, message])
+
   const appendTurn = useCallback((updater: (prev: Turn[]) => Turn[]) => {
     setTurns((prev) => updater(prev))
   }, [])
@@ -82,11 +142,20 @@ export default function ChatPage() {
             thread_id: threadId ?? undefined,
           })) {
             if (name === 'meta') {
-              setThreadId((payload as MetaEvent).thread_id)
+              const m = payload as MetaEvent
+              setThreadId(m.thread_id)
+              // 批次 3：meta 里就 upsert session（标题取 question 前 30 字）
+              sessionUpsert({
+                threadId: m.thread_id,
+                title: makeTitle(m.question ?? ''),
+                firstQuestion: m.question,
+                intent: m.intent,
+                lastAt: Date.now(),
+              })
               appendTurn((prev) => {
                 const next = [...prev]
                 const t = next[assistIdx]
-                if (t) t.meta = payload as MetaEvent
+                if (t) t.meta = m
                 return next
               })
             } else if (name === 'token') {
@@ -119,15 +188,23 @@ export default function ChatPage() {
                 return next
               })
             } else if (name === 'hitl') {
+              const h = payload as HitlResult
+              // 批次 3：挂起中 → touch pending=true
+              const cur = (useSessionStore.getState().activeThreadId
+                ?? threadId) as string | null
+              if (cur) sessionTouch(cur, true)
               appendTurn((prev) => {
                 const next = [...prev]
                 const t = next[assistIdx]
-                if (t) t.hitl = payload as HitlResult
+                if (t) t.hitl = h
                 return next
               })
             } else if (name === 'done') {
               const resp = (payload as { response: FinalResponse }).response
               setThreadId((tid) => resp?.thread_id ?? tid)
+              // 批次 3：终态 → touch pending=false（挂起面板确认放行后后端会再给 done）
+              const cur2 = resp?.thread_id ?? threadId
+              if (cur2) sessionTouch(cur2, false)
               appendTurn((prev) => {
                 const next = [...prev]
                 const t = next[assistIdx]
