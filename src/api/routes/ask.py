@@ -8,10 +8,11 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src import auth as auth_mod
 from src import config
+from src import sanitize as sanitize_mod
 from src import streaming as streaming_mod
 from src.graph import builder
 from src.graph import router as router_mod
@@ -19,36 +20,77 @@ from src.graph import router as router_mod
 router = APIRouter()
 
 
-# --- Pydantic 模型（verbatim from server.py） ---
+# --- Pydantic 模型（verbatim from server.py + Phase 3 消毒） ---
 
 class AskRequest(BaseModel):
     """提问入参。字段全部对应 `QAState` 的入口参数，不额外发明概念。"""
 
-    question: str = Field(..., min_length=1, description="自然语言问题")
+    question: str = Field(..., min_length=1, max_length=2000, description="自然语言问题")
     code: str | None = Field(None, description="限定股票代码，如 600519；留空则从问题里自动识别")
-    year: int | None = Field(None, description="限定年份，如 2024；留空则从问题里自动识别")
-    topk: int | None = Field(None, ge=1, le=50, description="召回片段数，默认 config.ANSWER_CANDIDATE_TOPK")
-    mode: str | None = Field(None, description=f"检索模式，可选 {sorted(config.RETRIEVE_MODES)}")
-    use_llm: bool = Field(True, description="False 时跳过模型、直接返回有出处的原文摘录（离线演示用）")
-    intent: str | None = Field(
-        None, description=f"强制指定意图（跳过路由），可选 {sorted(router_mod.INTENTS)}；"
-                          "留空则按规则路由")
-    thread_id: str | None = Field(
-        None, description="会话键。**传入同一个值可用于后续读取/确认**；留空则自动生成")
-    actor: str | None = Field(
-        None, description="**备注性质的调用方标识**（审计用）。"
-                          "开启鉴权后身份取自令牌（sub），此字段不再作为身份依据")
-    web_search: bool | None = Field(
-        None, description="联网兜底开关。留空跟随 FA_WEB_SEARCH_ENABLED；"
-                          "False 表示这一次不联网（库外问题仍按本地结论拒答）")
+    year: int | None = Field(None, ge=1990, le=2100, description="限定年份，如 2024")
+    topk: int | None = Field(None, ge=1, le=50, description="召回片段数")
+    mode: str | None = Field(None, max_length=32, description=f"检索模式 {sorted(config.RETRIEVE_MODES)}")
+    use_llm: bool = Field(True, description="False 时跳过模型")
+    intent: str | None = Field(None, max_length=64, description=f"强制指定意图 {sorted(router_mod.INTENTS)}")
+    thread_id: str | None = Field(None, max_length=64, description="会话键")
+    actor: str | None = Field(None, max_length=64, description="调用方标识（审计用）")
+    web_search: bool | None = Field(None, description="联网兜底开关")
+
+    @field_validator("question")
+    @classmethod
+    def _sanitize_question(cls, v: str) -> str:
+        return sanitize_mod.sanitize_text(v)
+
+    @field_validator("code")
+    @classmethod
+    def _sanitize_code(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_code(v)
+
+    @field_validator("mode", "intent", "thread_id")
+    @classmethod
+    def _sanitize_identifier(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_identifier(v)
+
+    @field_validator("actor")
+    @classmethod
+    def _sanitize_actor(cls, v: str | None) -> str | None:
+        # actor 是审计备注，允许中文自由文本
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_text(v)
 
 
 class DecisionRequest(BaseModel):
-    """人工确认入参。`decision` 是**受控枚举**：审批结论必须可机读，不能是自由文本。"""
+    """人工确认入参。`decision` 是**受控枚举**。"""
 
-    decision: str = Field(..., description="approve（可发布）/ reject（不予发布）")
-    note: str | None = Field(None, description="备注，会写进审计与响应 notes")
-    reviewer: str | None = Field(None, description="确认人标识")
+    decision: str = Field(..., description="approve / reject")
+    note: str | None = Field(None, max_length=1000, description="备注（审计）")
+    reviewer: str | None = Field(None, max_length=64, description="确认人标识")
+
+    @field_validator("decision")
+    @classmethod
+    def _validate_decision(cls, v: str) -> str:
+        if v not in ("approve", "reject"):
+            raise ValueError("decision must be 'approve' or 'reject'")
+        return v
+
+    @field_validator("note")
+    @classmethod
+    def _sanitize_note(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_text(v)
+
+    @field_validator("reviewer")
+    @classmethod
+    def _sanitize_reviewer(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_identifier(v)
 
 
 # --- 辅助函数（verbatim from server.py） ---

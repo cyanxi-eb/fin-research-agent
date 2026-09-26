@@ -5,23 +5,41 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src import auth as auth_mod
 from src import compare as compare_mod
+from src import sanitize as sanitize_mod
 
 router = APIRouter()
 
 
-# --- CompareRequest Pydantic 模型（verbatin from server.py） ---
+# --- CompareRequest Pydantic 模型（verbatin from server.py + Phase 3 消毒） ---
 
 class CompareRequest(BaseModel):
-    """多公司对比入参（POST 形态）。`codes` 至少 2 家 —— 单家没有"对比"语义。"""
+    """多公司对比入参（POST 形态）。`codes` 至少 2 家。"""
 
-    indicator: str = Field(..., min_length=1, description="财务指标名，如 营业总收入")
-    codes: list[str] = Field(..., min_length=2, description="要对比的公司代码或名称，至少 2 家")
-    period: str | None = Field(
-        None, description="指定报告期（如 2024-12-31）；留空则各取最新一期年报")
+    indicator: str = Field(..., min_length=1, max_length=64, description="财务指标名")
+    codes: list[str] = Field(..., min_length=2, max_length=20, description="要对比的公司，至少 2 家")
+    period: str | None = Field(None, max_length=32, description="指定报告期")
+
+    @field_validator("indicator")
+    @classmethod
+    def _sanitize_indicator(cls, v: str) -> str:
+        return sanitize_mod.sanitize_text(v)
+
+    @field_validator("codes")
+    @classmethod
+    def _sanitize_codes(cls, v: list[str]) -> list[str]:
+        # codes 可能是股票代码（6位数字）或公司名称（自由文本）—— 统一 strip + max_length
+        return [sanitize_mod.sanitize_text(c) for c in v]
+
+    @field_validator("period")
+    @classmethod
+    def _sanitize_period(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_identifier(v)
 
 
 # --- 辅助函数（verbatim from server.py） ---

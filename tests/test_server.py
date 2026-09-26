@@ -174,7 +174,7 @@ def test_hitl_unknown_thread_is_404_and_bad_decision_is_400(client):
     assert client.post("/api/hitl/nope/confirm",
                        json={"decision": "approve"}).status_code == 409
     assert client.post("/api/hitl/nope/confirm",
-                       json={"decision": "maybe"}).status_code == 400
+                       json={"decision": "maybe"}).status_code == 422  # Phase 3 消毒：枚举值在 schema 层拦
 
 
 # ==================== 引用与审计 ====================

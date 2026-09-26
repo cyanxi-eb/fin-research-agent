@@ -5,41 +5,53 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src import audit as audit_mod
 from src import auth as auth_mod
 from src import config, db
+from src import sanitize as sanitize_mod
 
 router = APIRouter()
 
 
-# --- Pydantic 模型（verbatim from server.py） ---
+# --- Pydantic 模型（verbatim from server.py + Phase 3 消毒） ---
 
 class RegisterRequest(BaseModel):
-    """注册入参。口令下限走 config，避免与代码里的校验两处不一致。
+    """注册入参。刻意不接受 role —— 不能自助提权。"""
 
-    **刻意不接受 `role`**：允许自助注册时自选角色 = 任何人注册一个 admin 就能提权。
-    角色只能由种子账号（运维显式配置）或后续的管理端点决定，不能由注册者自报。
-    """
-
-    username: str = Field(..., min_length=1, max_length=64, description="登录名，唯一")
+    username: str = Field(..., min_length=1, max_length=64, description="登录名")
     password: str = Field(..., min_length=config.AUTH_MIN_PASSWORD_LEN,
                           description=f"口令，至少 {config.AUTH_MIN_PASSWORD_LEN} 位")
 
+    @field_validator("username")
+    @classmethod
+    def _sanitize_username(cls, v: str) -> str:
+        return sanitize_mod.sanitize_identifier(v)
+
 
 class LoginRequest(BaseModel):
-    """登录入参。**用 JSON 而不是 OAuth2PasswordRequestForm** —— 后者要求表单解析，
-    会连带引入 `python-multipart` 这个纯为格式服务的依赖，收益为零。"""
+    """登录入参。"""
 
-    username: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1)
+
+    @field_validator("username")
+    @classmethod
+    def _sanitize_username(cls, v: str) -> str:
+        return sanitize_mod.sanitize_identifier(v)
 
 
 class RefreshRequest(BaseModel):
     """刷新入参。"""
 
-    refresh_token: str = Field(..., min_length=1)
+    refresh_token: str = Field(..., min_length=1, max_length=2048)
+
+    @field_validator("refresh_token")
+    @classmethod
+    def _strip_jwt(cls, v: str) -> str:
+        # JWT 含 . + - + _ + 字母数字，不做严格字符集校验，只 strip + max_length
+        return v.strip()
 
 
 # --- 辅助函数 + 常量（verbatim from server.py） ---

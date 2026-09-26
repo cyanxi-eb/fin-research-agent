@@ -4,21 +4,44 @@ from __future__ import annotations
 import uuid as _uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src import db
 from src import auth as auth_mod
+from src import sanitize as sanitize_mod
 
 router = APIRouter()
 
 
 class BookmarkCreate(BaseModel):
-    label: str = Field(..., description="书签标签，如「茅台2024资产」")
-    thread_id: str | None = None
-    question: str | None = None
-    answer_excerpt: str | None = None
-    citation_refs: str | None = None
-    note: str | None = None
+    label: str = Field(..., max_length=200, description="书签标签")
+    thread_id: str | None = Field(None, max_length=64)
+    question: str | None = Field(None, max_length=2000)
+    answer_excerpt: str | None = Field(None, max_length=4000)
+    citation_refs: str | None = Field(None, max_length=1000)
+    note: str | None = Field(None, max_length=1000)
+
+    @field_validator("label", "question", "answer_excerpt", "note")
+    @classmethod
+    def _sanitize_text_fields(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_text(v)
+
+    @field_validator("thread_id")
+    @classmethod
+    def _sanitize_thread_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return sanitize_mod.sanitize_identifier(v)
+
+    @field_validator("citation_refs")
+    @classmethod
+    def _sanitize_refs(cls, v: str | None) -> str | None:
+        # citation_refs 是 JSON 字符串，可能含特殊字符 —— 只 strip
+        if v is None:
+            return None
+        return v.strip()
 
 
 @router.get("/api/bookmarks")

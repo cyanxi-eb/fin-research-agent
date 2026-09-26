@@ -5,25 +5,44 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src import auth as auth_mod
 from src.ingest import wizard as wizard_mod
+from src import sanitize as sanitize_mod
 
 router = APIRouter()
 
 
-# --- Pydantic 模型（verbatim from server.py） ---
+# --- Pydantic 模型（verbatim from server.py + Phase 3 消毒） ---
 
 class IngestPlanRequest(BaseModel):
     """向导第一步入参：一段自然语言需求。"""
     text: str = Field(..., min_length=1, max_length=2000, description="自然语言入库需求")
+
+    @field_validator("text")
+    @classmethod
+    def _sanitize_text(cls, v: str) -> str:
+        return sanitize_mod.sanitize_text(v)
 
 
 class IngestCommitRequest(BaseModel):
     """向导第五步入参：需求单 + 勾选格。selected 每项 = [code, period, indicator]。"""
     plan: wizard_mod.IngestPlan
     selected: list[list[str]] = Field(default_factory=list)
+
+    @field_validator("selected")
+    @classmethod
+    def _sanitize_selected(cls, v: list[list[str]]) -> list[list[str]]:
+        # selected 每项 [code, period, indicator] 各自消毒
+        cleaned = []
+        for row in v:
+            if len(row) >= 3:
+                code = sanitize_mod.sanitize_text(row[0])
+                period = sanitize_mod.sanitize_identifier(row[1])
+                indicator = sanitize_mod.sanitize_text(row[2])
+                cleaned.append([code, period, indicator])
+        return cleaned
 
 
 # --- 端点（verbatim from server.py，@app → @router） ---
