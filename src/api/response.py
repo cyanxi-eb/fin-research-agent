@@ -189,11 +189,8 @@ async def api_version_rewrite_middleware(
     """
     path = request.scope.get("path", "")
     if path.startswith(V1_PREFIX + "/") or path == V1_PREFIX:
-        # /api/v1/auth/login → /api/auth/login
-        # /api/v1 → /api（极少用，防御性处理）
         new_path = LEGACY_PREFIX + path[len(V1_PREFIX):]
         request.scope["path"] = new_path
-        # raw_path 是 bytes 类型
         raw_path = request.scope.get("raw_path")
         if isinstance(raw_path, bytes):
             request.scope["raw_path"] = new_path.encode("utf-8")
