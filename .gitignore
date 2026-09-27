@@ -48,10 +48,15 @@ data/db/
 *.db-*
 *.pkl
 
-# ---- seed/ 下可重建的大体积产物 ----
-seed/data/vector/
-seed/data/parsed/
-seed/data/index/
+# ---- seed/ 下的预构建索引/向量/解析结果：**必须入库，Docker 构建需要它们** ----
+# ⚠️ 这几行是**放行**规则，别改错！Dockerfile COPY seed/ /app/seed/ 依赖这些文件。
+!seed/data/vector/
+!seed/data/vector/**
+!seed/data/parsed/
+!seed/data/parsed/**
+!seed/data/index/
+!seed/data/index/**
+!seed/data/index/*.pkl
 
 # ---- 外部嵌入 git 仓库（如有） ----
 .git/modules/

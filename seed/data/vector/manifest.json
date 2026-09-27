@@ -1,0 +1,11 @@
+{
+  "backend": "api",
+  "provider": "qwen",
+  "model": "text-embedding-v4",
+  "dim": 1024,
+  "n": 3161,
+  "fingerprint": "1eb732b4e66b78c24bb2e05b8b5bf9a623fe97e5e868a6831fa08e8668e62a1a",
+  "normalized": true,
+  "built_at": "2026-09-22 19:34:36",
+  "seconds": 315.5
+}
