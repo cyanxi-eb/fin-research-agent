@@ -51,56 +51,42 @@ def _make_sqlite(path: Path | None):
 
 
 def _make_mysql():
-    """MySQL Checkpointer（进程内复用同一连接）。返回缓存里的 `(saver, conn)`。
+    """MySQL Checkpointer（每次新建连接，不缓存）。
 
-    ⚠️ 三个**实测确认**的必要条件（workflow-agent 踩过，本步复现过）：
-    1. **连接必须 `autocommit=True`**：LangGraph 的 MySQL saver 在 `setup()` 里
-       逐条迁移后会显式 `cur.execute("COMMIT")`，但**建 `checkpoint_migrations` 表本身
-       不在那个逐条提交的循环里**。若连接是 pymysql 默认的 autocommit=False，
-       这张 DDL 会悬在隐式事务中；当迁移版本已是最新（没有可跑的迁移）时就再也不提交，
-       表现为"表建了但看不见 / 下次仍从版本 -1 重建"。在连接层放开 autocommit 才稳。
-    2. **必须显式调 `setup()`**：saver 只在 `from_conn_string()` 的上下文管理器里建表，
-       我们是手工建连接再传给 `PyMySQLSaver(conn)`，所以要自己调一次（与 SQLite 分支同理）。
-    3. **必须 `ping(reconnect=True)`**：MySQL 默认 wait_timeout=28800s，但长时间 idle
-       连接会被服务器端断开，下次使用报 InterfaceError(0,'')。在 `get_checkpointer()` 里
-       每次取缓存前 ping 一次（已断则自动重连），比在 connect() 里加 MYSQL_OPT_RECONNECT
-       更可靠 —— 后者只在 TCP 层自动重连，pymysql 会话状态可能已丢失。
+    ⚠️ 实测结论（踩坑后最终方案）：**放弃进程内长连接缓存**。
+    MySQL server has gone away (Bad file descriptor) 的根因是：pymysql
+    的 ping(reconnect=True) 只重建底层 socket，但 LangGraph 的
+    PyMySQLSaver 内部可能缓存了旧 cursor / session 状态，导致后续
+    checkpoint 读写仍打到已关闭的 fd。每次新建 conn + saver 最稳。
+
+    性能可接受：pymysql.connect + setup() ≈ 30-50ms，一次请求内
+    checkpoint 调用 ≈ 2-3 次，额外开销 < 200ms。
+
+    仍保留 autocommit=True（同原注释，setup() DDL 必须在 autocommit
+    下才能正确提交）。
     """
     import pymysql
     from pymysql.cursors import DictCursor
 
-    key = f"mysql:{config.MYSQL['database']}"
-    cached = _SAVERS.get(key)
-    if cached is not None:
-        saver, conn = cached
-        try:
-            conn.ping(reconnect=True)   # ← 三要素之三
-        except Exception:
-            # ping 失败（重连也救不回来）→ 清缓存重建
-            _SAVERS.pop(key, None)
-        else:
-            return cached              # ping 成功，连接可用
-
-    # 库不存在时 saver 的 setup() 会报 "Unknown database" —— 业务库建表（db.init_schema）
-    # 会先建库，但 Checkpointer 可能被更早地触发（服务起图时），所以这里兜底建库。
+    # 库不存在时兜底建库（同原逻辑）
     from src import db as _db
     _db.ensure_mysql_database()
 
     from langgraph.checkpoint.mysql.pymysql import PyMySQLSaver
 
+    # 每次全新连接（connect_timeout=5s 防止 MySQL 不可达时卡死）
     conn = pymysql.connect(charset="utf8mb4", cursorclass=DictCursor,
-                           autocommit=True, **config.MYSQL)
+                           autocommit=True, connect_timeout=5, **config.MYSQL)
     saver = PyMySQLSaver(conn)
     saver.setup()
-    _SAVERS[key] = (saver, conn)
-    return _SAVERS[key]
+    return saver, conn
 
 
 def make_checkpointer(path: Path | None = None):
-    """返回当前后端（sqlite / mysql）的 Checkpointer，进程内复用同一连接。
+    """返回当前后端（sqlite / mysql）的 Checkpointer。
 
-    未知后端**直接报错**，不静默退回 SQLite —— "我明明配了 MySQL，怎么挂在 SQLite 上"
-    这类静默降级，最后表现为"重启后读不回挂起流程"，而检查配置时一切正常。
+    MySQL 每次新建连接（见 `_make_mysql` 注释）；SQLite 仍进程内复用。
+    未知后端**直接报错**，不静默退回 SQLite。
     """
     backend = _backend()
     if backend == "mysql":
@@ -113,12 +99,7 @@ def make_checkpointer(path: Path | None = None):
 
 
 def reset() -> None:
-    """关掉并清空缓存（单测用：让每个用例拿到干净的 saver）。"""
-    for _saver, conn in _SAVERS.values():
-        try:
-            conn.close()
-        except Exception:  # noqa: BLE001 —— 收尾清理不该把用例搞挂
-            pass
+    """关掉并清空缓存（仅 SQLite 分支有缓存，MySQL 每次新建）。"""
     _SAVERS.clear()
 
 
@@ -132,6 +113,7 @@ def status() -> dict:
         out = {"backend": "mysql",
                "path": f"{config.MYSQL['host']}:{config.MYSQL['port']}/{config.MYSQL['database']}",
                "exists": None, "threads": None}
+        conn = None
         try:
             saver, conn = _make_mysql()
             with conn.cursor() as cur:
@@ -141,6 +123,12 @@ def status() -> dict:
         except Exception as e:  # noqa: BLE001 —— 健康检查不能把服务搞挂
             out["exists"] = False
             out["error"] = f"{type(e).__name__}: {e}"
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         return out
 
     p = config.CHECKPOINT_DB_PATH
