@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 
+from src.config.core import WATCHLIST_PATH
+
 # ---- 财务指标口径表（唯一事实来源）----
 # 为什么收口在这里：LLM 选指标时会用「营业收入 / 营业总收入 / 总营收」等不同说法，
 # 别名不收口就会查不到数据、或把两个不同口径当成一个指标两套值。
