@@ -23,8 +23,14 @@ docs/
 # ---- 大且可重建的数据产物（**注意：seed/ 与 data/regulation/ 必须放行**）----
 data/raw/
 data/parsed/
-data/index/
-data/vector/
+data/index/              # 挡根 data/index/
+data/vector/             # 挡根 data/vector/
+# ⚠️ 关键：显式放行 seed 里的预计算索引/向量文件
+# Docker .dockerignore 对 "data/index/" 可能做子串匹配，隐式挡住 seed/data/index/
+!seed/data/index/
+!seed/data/index/**
+!seed/data/vector/
+!seed/data/vector/**
 data/db/
 *.db
 *.db-*
