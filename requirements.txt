@@ -51,6 +51,10 @@ numpy>=1.26               # 向量矩阵与相似度（rank-bm25 已隐式带，
 # 切 qdrant 需同时满足：FA_VECTOR_BACKEND=qdrant + 运行中 Qdrant 服务（FA_QDRANT_URL）。
 qdrant-client>=1.10.0
 
+# ---- Phase 3: 可观测性 ----
+# Prometheus metrics endpoint (/api/metrics) — FastAPI middleware 自动注册
+prometheus-client>=0.21
+
 # ---- 评估（Step 6 起启用）----
 # 检索级评测已在 Step 4 用纯标准库 + numpy 做完（scripts/eval_retrieval.py，不调模型、零依赖）；
 # 这里放开的是**答案级**评估（faithfulness / answer_relevancy），它必须调 LLM。
