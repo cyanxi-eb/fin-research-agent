@@ -80,6 +80,8 @@ services:
       - --collation-server=utf8mb4_0900_ai_ci
       - --innodb-buffer-pool-size=128M
       - --performance-schema=OFF
+      - --wait-timeout=86400
+      - --interactive-timeout=86400
     volumes:
       - fin-research-mysql:/var/lib/mysql
     healthcheck:
