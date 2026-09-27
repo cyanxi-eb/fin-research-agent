@@ -1,28 +1,49 @@
-# fin-research-agent — 金融财报分析 Agent（v0.9.0，数据入库向导）
+# fin-research-agent — 金融财报分析 Agent（v0.10.0，Docker 部署 + LLM 激活）
 
 > 面向券商研究所 / 合规 / 投研场景的**年报问答与分析 Agent**。
 > 核心卖点是**可核验的溯源**：每条结论都能落到
 > `[1] 贵州茅台2024年年报 P87 管理层讨论与分析 (第2/3段)` 这种可人工翻页核对的出处，
 > 而不是一段没有依据的文字。
 
+**VM 已部署**（2026-09-27）：`http://192.168.57.128:8001/api/health` —— `llm.ready=True`。
+
 上游文档（先文档、后代码）：
-[架构设计文档 v1.0](./架构设计文档-金融财报分析Agent-v1.0.md) ·
+[架构设计文档 v2.0（已部署）](./docs/ARCHITECTURE.md) ·
+[架构设计文档 v1.0（原始设计）](./架构设计文档-金融财报分析Agent-v1.0.md) ·
+[企业级落地方案](./企业级落地方案.md) ·
 [实施方案 v0.1](./实施方案-金融财报分析Agent-v0.1.md) ·
+[项目总结](./项目总结.md) ·
+[项目讲解稿](./项目讲解稿.md) ·
+[踩坑归档 →](./docs/archive/) ·
 [扩展与已知坑](./EXTENSION.md) · [版本记录](./CHANGELOG.md) ·
 [检索评测报告](./eval/report.md) · [答案级评测报告](./eval/report_answer.md)
 
 ---
 
-## 当前进度（Step 6 已完成：会流式、会对比、能装进容器；v0.8.0 补：鉴权/联网/前端改版；v0.9.0 补：数据入库向导）
+## 快速测试
 
-七个 Step 中已完成 **Step 0 ~ Step 6**；v0.8.0 做了一轮"从能用变成能看"的补强，
-v0.9.0 在此之上加了**数据入库向导**（结构化库的数据在界面上自助扩容）：
+```bash
+# VM 上直接打接口
+curl -X POST http://192.168.57.128:8001/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"贵州茅台2024年营收","use_llm":true}'
 
-| 本轮（v0.9.0） | 内容 | 状态 |
+# 本机 Docker Compose（需要 .env 写 DEEPSEEK_API_KEY / QWEN_API_KEY）
+APP_PORT=8001 FA_AUTH_ENABLED=0 FA_VECTOR_BACKEND=qdrant \
+  docker compose up -d --build
+```
+
+---
+
+## 当前进度（Step 7 已完成：Docker Compose 部署 + LLM 激活；v0.10.0）
+
+| 本轮（v0.10.0） | 内容 | 状态 |
 |---|---|---|
-| ① 数据入库向导 | 「数据入库」页签五步：自然语言→需求单（LLM 可用可手填）→抓取预览（只抓不写）→勾选→入库；LLM 草稿必过既有归一，认不上的进 unresolved 等人改 | ✅ |
-| ② 库外新公司 6 位代码通道 | 新公司必然不在 companies 表里 —— 6 位纯数字直通当抓取代码（手测发现并修复的死锁） | ✅ |
-| ③ admin 闸门 + 审计 | commit 需管理员权限（403 分离 401）；每次入库写 `data_ingest` 审计（batch + 需求单 + 勾选明细） | ✅ |
+| ① Docker Compose 4 容器 | App (FastAPI) + Nginx + MySQL 8 + Qdrant（3161 pts × 1024 dim） | ✅ |
+| ② LLM 真实激活 | VM `.env` 写入 API Key；`/api/ask` 返回 `degraded=False` 中文答案 | ✅ |
+| ③ Checkpointer 稳定化 | 放弃 MySQL 长连接缓存（三次迭代后每次新建 conn + saver） | ✅ |
+| ④ `.dockerignore` 三层 bug 修复 | 根锚路径段 + gitignore negation rules | ✅ |
+| ⑤ Nginx resolver 启动修复 | `resolver 127.0.0.11` + 变量 `proxy_pass` | ✅ |
 
 | v0.8.0 | 内容 | 状态 |
 |---|---|---|
@@ -39,6 +60,7 @@ v0.9.0 在此之上加了**数据入库向导**（结构化库的数据在界面
 | 4 | 向量召回 + RRF + 重排（混合检索） | ✅ |
 | 5 | 完整 LangGraph 编排（路由 / 三子图 / 引用校验 / HITL / 审计） | ✅ |
 | 6 | 服务化补全（SSE 流式 / 多公司对比 / 多轮指代）+ 单文件前端 + 答案级评估 + 容器化交付 | ✅ |
+| **7** | **Docker Compose 4 容器 + Qdrant 向量库 + LLM API Key 激活 + Checkpointer 稳定化** | ✅ |
 
 **Step 1 实测规模**：5 家公司 / 6 个公司-年度 / 3161 个 chunk / BM25 索引 8.4MB，
 全流程（解析→切分→建索引）冷跑约 34s。
