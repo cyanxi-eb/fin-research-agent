@@ -28,9 +28,6 @@ COPY launcher.py ./launcher.py
 # 由 entrypoint.sh 首次启动时 `cp -rn` 复制进数据卷（-n 不覆盖用户挂卷放的真语料）。
 COPY seed/ /app/seed/
 
-# 法规原始件（entrypoint 复制 seed 时已含 regulation；这里保留独立路径，便于排查与单独替换）
-COPY data/regulation /app/data/regulation
-
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
