@@ -53,7 +53,7 @@ def _make_sqlite(path: Path | None):
 def _make_mysql():
     """MySQL Checkpointer（进程内复用同一连接）。返回缓存里的 `(saver, conn)`。
 
-    ⚠️ 两个**实测确认**的必要条件（workflow-agent 踩过，本步复现过）：
+    ⚠️ 三个**实测确认**的必要条件（workflow-agent 踩过，本步复现过）：
     1. **连接必须 `autocommit=True`**：LangGraph 的 MySQL saver 在 `setup()` 里
        逐条迁移后会显式 `cur.execute("COMMIT")`，但**建 `checkpoint_migrations` 表本身
        不在那个逐条提交的循环里**。若连接是 pymysql 默认的 autocommit=False，
@@ -61,6 +61,10 @@ def _make_mysql():
        表现为"表建了但看不见 / 下次仍从版本 -1 重建"。在连接层放开 autocommit 才稳。
     2. **必须显式调 `setup()`**：saver 只在 `from_conn_string()` 的上下文管理器里建表，
        我们是手工建连接再传给 `PyMySQLSaver(conn)`，所以要自己调一次（与 SQLite 分支同理）。
+    3. **必须 `ping(reconnect=True)`**：MySQL 默认 wait_timeout=28800s，但长时间 idle
+       连接会被服务器端断开，下次使用报 InterfaceError(0,'')。在 `get_checkpointer()` 里
+       每次取缓存前 ping 一次（已断则自动重连），比在 connect() 里加 MYSQL_OPT_RECONNECT
+       更可靠 —— 后者只在 TCP 层自动重连，pymysql 会话状态可能已丢失。
     """
     import pymysql
     from pymysql.cursors import DictCursor
@@ -68,7 +72,14 @@ def _make_mysql():
     key = f"mysql:{config.MYSQL['database']}"
     cached = _SAVERS.get(key)
     if cached is not None:
-        return cached
+        saver, conn = cached
+        try:
+            conn.ping(reconnect=True)   # ← 三要素之三
+        except Exception:
+            # ping 失败（重连也救不回来）→ 清缓存重建
+            _SAVERS.pop(key, None)
+        else:
+            return cached              # ping 成功，连接可用
 
     # 库不存在时 saver 的 setup() 会报 "Unknown database" —— 业务库建表（db.init_schema）
     # 会先建库，但 Checkpointer 可能被更早地触发（服务起图时），所以这里兜底建库。
